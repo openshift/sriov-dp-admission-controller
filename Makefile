@@ -3,9 +3,9 @@
 #   This makefile was adapted from: https://github.com/vincentbernat/hellogopher/blob/feature/glide/Makefile
 #
 # Package related
-BINARY_NAME=sriovdp
-PACKAGE=sriov-network-device-plugin
-ORG_PATH=github.com/intel
+BINARY_NAME=webhook
+PACKAGE=sriov-dp-admission-controller
+ORG_PATH=github.com/redhat-nfvpe
 REPO_PATH=$(ORG_PATH)/$(PACKAGE)
 GOPATH=$(CURDIR)/.gopath
 GOBIN=$(CURDIR)/bin
@@ -19,10 +19,8 @@ export GOBIN
 
 # Docker
 IMAGEDIR=$(BASE)/images
-DOCKERFILE=$(CURDIR)/Dockerfile
-TAG=nfvpe/sriov-device-plugin
-DOCKERFILE_WEBHOOK=$(CURDIR)/Dockerfile.webhook
-TAG_WEBHOOK=nfvpe/sriov-device-plugin-webhook
+DOCKERFILE=$(CURDIR)/Dockerfile.webhook
+TAG=nfvpe/sriov-dp-admission-controller
 # Accept proxy settings for docker 
 DOCKERARGS=
 ifdef HTTP_PROXY
@@ -149,13 +147,6 @@ vendor: glide.lock | $(BASE) ; $(info  retrieving dependencies...)
 .PHONY: image
 image: | $(BASE) ; $(info Building Docker image...)
 	@docker build -t $(TAG) -f $(DOCKERFILE)  $(CURDIR) $(DOCKERARGS)
-
-# Docker image for mutating webhook
-# To pass proxy for Docker invoke it as 'make image HTTP_PROXY=http://192.168.0.1:8080'
-.PHONY: webhook
-webhook: | $(BASE) ; $(info Building mutating webhook Docker image...)
-	@docker build -t $(TAG_WEBHOOK) -f $(DOCKERFILE_WEBHOOK)  $(CURDIR) $(DOCKERARGS)
-
 
 # Misc
 

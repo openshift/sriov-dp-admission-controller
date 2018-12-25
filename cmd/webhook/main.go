@@ -20,7 +20,7 @@ import (
 	"net/http"
 
 	"github.com/golang/glog"
-	"github.com/intel/sriov-network-device-plugin/pkg/webhook"
+	"github.com/redhat-nfvpe/sriov-dp-admission-controller/pkg/webhook"
 )
 
 func main() {

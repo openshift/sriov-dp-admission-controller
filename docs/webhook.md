@@ -15,9 +15,9 @@ kubectl apply -f deployments/webhook/server.yaml
 ## Installation guide
 
 ### Building Docker image
-Go to the root directory of sriov-network-device-plugin and execute:
+Go to the root directory of sriov-dp-admission-controller and execute:
 ```
-cd $GOPATH/src/github.com/intel/sriov-network-device-plugin
+cd $GOPATH/src/github.com/redhat-nfvpe/sriov-dp-admission-controller
 make webhook
 ```
 

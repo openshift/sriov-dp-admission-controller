@@ -14,7 +14,7 @@
 
 FROM golang:alpine as builder
 
-ENV PKG_NAME=github.com/intel/sriov-network-device-plugin
+ENV PKG_NAME=github.com/redhat-nfvpe/sriov-dp-admission-controller
 ENV PKG_PATH=$GOPATH/src/$PKG_NAME
 WORKDIR $PKG_PATH
 

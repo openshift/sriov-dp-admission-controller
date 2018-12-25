@@ -17,7 +17,7 @@ package main
 import (
 	"flag"
 	"github.com/golang/glog"
-	"github.com/intel/sriov-network-device-plugin/pkg/installer"
+	"github.com/redhat-nfvpe/sriov-dp-admission-controller/pkg/installer"
 )
 
 func main() {

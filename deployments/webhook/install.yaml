@@ -25,7 +25,7 @@ spec:
       serviceAccount: sriovdp-mutating-webhook-sa
       containers:
       - name: install-sriovdp-mutating-webhook-deps
-        image: nfvpe/sriov-device-plugin-webhook:latest
+        image: nfvpe/sriov-dp-admission-controller:latest
         command:
         - webhook_installer
         args:
