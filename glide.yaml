@@ -1,0 +1,36 @@
+package: .
+import:
+- package: github.com/cloudflare/cfssl
+  subpackages:
+  - csr
+- package: github.com/golang/glog
+- package: github.com/intel/multus-cni
+  subpackages:
+  - types
+- package: github.com/pkg/errors
+- package: github.com/redhat-nfvpe/sriov-dp-admission-controller
+  subpackages:
+  - pkg/installer
+  - pkg/webhook
+- package: k8s.io/api
+  subpackages:
+  - admission/v1beta1
+  - admissionregistration/v1beta1
+  - certificates/v1beta1
+  - core/v1
+- package: k8s.io/apimachinery
+  subpackages:
+  - pkg/api/resource
+  - pkg/apis/meta/v1
+  - pkg/runtime
+  - pkg/runtime/serializer
+  - pkg/util/intstr
+- package: k8s.io/client-go
+  subpackages:
+  - kubernetes
+  - rest
+testImport:
+- package: github.com/onsi/ginkgo
+  subpackages:
+  - extensions/table
+- package: github.com/onsi/gomega
