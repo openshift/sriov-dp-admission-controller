@@ -3,7 +3,8 @@
 #   This makefile was adapted from: https://github.com/vincentbernat/hellogopher/blob/feature/glide/Makefile
 #
 # Package related
-BINARY_NAME=webhook
+WEBHOOK_BINARY_NAME=webhook
+WEBHOOK_INSTALLER_BINARY_NAME=webhook_installer
 PACKAGE=sriov-dp-admission-controller
 ORG_PATH=github.com/redhat-nfvpe
 REPO_PATH=$(ORG_PATH)/$(PACKAGE)
@@ -52,11 +53,14 @@ $(GOBIN):
 $(BUILDDIR): | $(BASE) ; $(info Creating build directory...)
 	@cd $(BASE) && mkdir -p $@
 
-build: vendor $(BUILDDIR)/$(BINARY_NAME) ; $(info Building $(BINARY_NAME)...)
+build: vendor $(BUILDDIR)/$(WEBHOOK_BINARY_NAME) $(BUILDDIR)/$(WEBHOOK_INSTALLER_BINARY_NAME); $(info Building $(WEBHOOK_BINARY_NAME) and $(WEBHOOK_INSTALLER_BINARY_NAME)...)
 	$(info Done!)
 
-$(BUILDDIR)/$(BINARY_NAME): $(BUILDDIR)
-	@cd $(BASE)/cmd/$(BINARY_NAME) && $(GO) build -o $(BUILDDIR)/$(BINARY_NAME) -v
+$(BUILDDIR)/$(WEBHOOK_BINARY_NAME): $(BUILDDIR)
+	@cd $(BASE)/cmd/$(WEBHOOK_BINARY_NAME) && $(GO) build -o $(BUILDDIR)/$(WEBHOOK_BINARY_NAME) -v
+
+$(BUILDDIR)/$(WEBHOOK_INSTALLER_BINARY_NAME): $(BUILDDIR)
+	@cd $(BASE)/cmd/$(WEBHOOK_INSTALLER_BINARY_NAME) && $(GO) build -o $(BUILDDIR)/$(WEBHOOK_INSTALLER_BINARY_NAME) -v
 
 
 # Tools
@@ -153,7 +157,8 @@ image: | $(BASE) ; $(info Building Docker image...)
 .PHONY: clean
 clean: ; $(info  Cleaning...)	@ ## Cleanup everything
 	@rm -rf $(GOPATH)
-	@rm -rf $(BUILDDIR)/$(BINARY_NAME)
+	@rm -rf $(BUILDDIR)/$(WEBHOOK_BINARY_NAME)
+	@rm -rf $(BUILDDIR)/$(WEBHOOK_INSTALLER_BINARY_NAME)
 	@rm -rf test/tests.* test/coverage.*
 
 .PHONY: help
