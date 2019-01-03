@@ -14,7 +14,6 @@ import (
 	"errors"
 	"net"
 	"net/mail"
-	"net/url"
 	"strings"
 
 	cferr "github.com/cloudflare/cfssl/errors"
@@ -269,9 +268,6 @@ func getHosts(cert *x509.Certificate) []string {
 	for _, email := range cert.EmailAddresses {
 		hosts = append(hosts, email)
 	}
-	for _, uri := range cert.URIs {
-		hosts = append(hosts, uri.String())
-	}
 
 	return hosts
 }
@@ -383,8 +379,6 @@ func Generate(priv crypto.Signer, req *CertificateRequest) (csr []byte, err erro
 			tpl.IPAddresses = append(tpl.IPAddresses, ip)
 		} else if email, err := mail.ParseAddress(req.Hosts[i]); err == nil && email != nil {
 			tpl.EmailAddresses = append(tpl.EmailAddresses, email.Address)
-		} else if uri, err := url.ParseRequestURI(req.Hosts[i]); err == nil && uri != nil {
-			tpl.URIs = append(tpl.URIs, uri)
 		} else {
 			tpl.DNSNames = append(tpl.DNSNames, req.Hosts[i])
 		}

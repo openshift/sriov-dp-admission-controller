@@ -31,7 +31,6 @@ const (
 	testEmptyCertFile            = "testdata/emptycert.pem"
 	testPrivateRSAKey            = "testdata/priv_rsa_key.pem"
 	testPrivateECDSAKey          = "testdata/private_ecdsa_key.pem"
-	testPrivateEd25519Key        = "testdata/private_ed25519_key.pem"
 	testUnsupportedECDSAKey      = "testdata/secp256k1-key.pem"
 	testMessedUpPrivateKey       = "testdata/messed_up_priv_key.pem"
 	testEncryptedPrivateKey      = "testdata/enc_priv_key.pem"
@@ -319,20 +318,14 @@ func TestParseCertificatesPEM(t *testing.T) {
 }
 
 func TestSelfSignedCertificatePEM(t *testing.T) {
-	testPEM, err := ioutil.ReadFile(testCertFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = ParseSelfSignedCertificatePEM(testPEM)
+	testPEM, _ := ioutil.ReadFile(testCertFile)
+	_, err := ParseSelfSignedCertificatePEM(testPEM)
 	if err != nil {
 		t.Fatalf("%v", err)
 	}
 
 	// a few lines deleted from the pem file
-	wrongPEM, err := ioutil.ReadFile(testMessedUpCertFile)
-	if err != nil {
-		t.Fatal(err)
-	}
+	wrongPEM, _ := ioutil.ReadFile(testMessedUpCertFile)
 	_, err2 := ParseSelfSignedCertificatePEM(wrongPEM)
 	if err2 == nil {
 		t.Fatal("Improper pem file failed to raise an error")
@@ -352,29 +345,14 @@ func TestSelfSignedCertificatePEM(t *testing.T) {
 func TestParsePrivateKeyPEM(t *testing.T) {
 
 	// expected cases
-	testRSAPEM, err := ioutil.ReadFile(testPrivateRSAKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = ParsePrivateKeyPEM(testRSAPEM)
+	testRSAPEM, _ := ioutil.ReadFile(testPrivateRSAKey)
+	_, err := ParsePrivateKeyPEM(testRSAPEM)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	testECDSAPEM, err := ioutil.ReadFile(testPrivateECDSAKey)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testECDSAPEM, _ := ioutil.ReadFile(testPrivateECDSAKey)
 	_, err = ParsePrivateKeyPEM(testECDSAPEM)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	testEd25519PEM, err := ioutil.ReadFile(testPrivateEd25519Key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = ParsePrivateKeyPEM(testEd25519PEM)
 	if err != nil {
 		t.Fatal(err)
 	}

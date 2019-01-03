@@ -63,10 +63,13 @@ func newLocalSigner(root Root, policy *config.Signing) (s signer.Signer, err err
 	// signers.
 	var shouldProvide bool
 
-	// localSignerList is a list of signers defined
-	// here or in the universal_signers*.go files.
-	// These activate and deactivate signers based
-	// on build flags.
+	// localSignerList is defined in the
+	// universal_signers*.go files. These activate
+	// and deactivate signers based on build
+	// flags; for example,
+	// universal_signers_pkcs11.go contains a list
+	// of valid signers when PKCS #11 is turned
+	// on.
 	for _, possibleSigner := range localSignerList {
 		s, shouldProvide, err = possibleSigner(&root, policy)
 		if shouldProvide {

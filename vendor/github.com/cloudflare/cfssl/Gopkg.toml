@@ -24,11 +24,6 @@
 #   go-tests = true
 #   unused-packages = true
 
-required = [
-  "golang.org/x/lint/golint",
-  "github.com/GeertJohan/fgt",
-  "bitbucket.org/liamstask/goose/cmd/goose",
-]
 
 [[constraint]]
   branch = "master"

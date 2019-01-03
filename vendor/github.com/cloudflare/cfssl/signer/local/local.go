@@ -16,7 +16,6 @@ import (
 	"net"
 	"net/http"
 	"net/mail"
-	"net/url"
 	"os"
 
 	"github.com/cloudflare/cfssl/certdb"
@@ -106,7 +105,6 @@ func (s *Signer) sign(template *x509.Certificate) (cert []byte, err error) {
 		}
 		template.DNSNames = nil
 		template.EmailAddresses = nil
-		template.URIs = nil
 		s.ca = template
 		initRoot = true
 	}
@@ -161,14 +159,13 @@ func PopulateSubjectFromCSR(s *signer.Subject, req pkix.Name) pkix.Name {
 	return name
 }
 
-// OverrideHosts fills template's IPAddresses, EmailAddresses, DNSNames, and URIs with the
+// OverrideHosts fills template's IPAddresses, EmailAddresses, and DNSNames with the
 // content of hosts, if it is not nil.
 func OverrideHosts(template *x509.Certificate, hosts []string) {
 	if hosts != nil {
 		template.IPAddresses = []net.IP{}
 		template.EmailAddresses = []string{}
 		template.DNSNames = []string{}
-		template.URIs = []*url.URL{}
 	}
 
 	for i := range hosts {
@@ -176,8 +173,6 @@ func OverrideHosts(template *x509.Certificate, hosts []string) {
 			template.IPAddresses = append(template.IPAddresses, ip)
 		} else if email, err := mail.ParseAddress(hosts[i]); err == nil && email != nil {
 			template.EmailAddresses = append(template.EmailAddresses, email.Address)
-		} else if uri, err := url.ParseRequestURI(hosts[i]); err == nil && uri != nil {
-			template.URIs = append(template.URIs, uri)
 		} else {
 			template.DNSNames = append(template.DNSNames, hosts[i])
 		}
@@ -237,9 +232,6 @@ func (s *Signer) Sign(req signer.SignRequest) (cert []byte, err error) {
 		if profile.CSRWhitelist.EmailAddresses {
 			safeTemplate.EmailAddresses = csrTemplate.EmailAddresses
 		}
-		if profile.CSRWhitelist.URIs {
-			safeTemplate.URIs = csrTemplate.URIs
-		}
 	}
 
 	if req.CRLOverride != "" {
@@ -282,11 +274,6 @@ func (s *Signer) Sign(req signer.SignRequest) (cert []byte, err error) {
 		}
 		for _, name := range safeTemplate.EmailAddresses {
 			if profile.NameWhitelist.Find([]byte(name)) == nil {
-				return nil, cferr.New(cferr.PolicyError, cferr.UnmatchedWhitelist)
-			}
-		}
-		for _, name := range safeTemplate.URIs {
-			if profile.NameWhitelist.Find([]byte(name.String())) == nil {
 				return nil, cferr.New(cferr.PolicyError, cferr.UnmatchedWhitelist)
 			}
 		}
@@ -480,17 +467,17 @@ func (s *Signer) SignFromPrecert(precert *x509.Certificate, scts []ct.SignedCert
 	// Create the new tbsCert from precert. Do explicit copies of any slices so that we don't
 	// use memory that may be altered by us or the caller at a later stage.
 	tbsCert := x509.Certificate{
-		SignatureAlgorithm:          precert.SignatureAlgorithm,
-		PublicKeyAlgorithm:          precert.PublicKeyAlgorithm,
-		PublicKey:                   precert.PublicKey,
-		Version:                     precert.Version,
-		SerialNumber:                precert.SerialNumber,
-		Issuer:                      precert.Issuer,
-		Subject:                     precert.Subject,
-		NotBefore:                   precert.NotBefore,
-		NotAfter:                    precert.NotAfter,
-		KeyUsage:                    precert.KeyUsage,
-		BasicConstraintsValid:       precert.BasicConstraintsValid,
+		SignatureAlgorithm:    precert.SignatureAlgorithm,
+		PublicKeyAlgorithm:    precert.PublicKeyAlgorithm,
+		PublicKey:             precert.PublicKey,
+		Version:               precert.Version,
+		SerialNumber:          precert.SerialNumber,
+		Issuer:                precert.Issuer,
+		Subject:               precert.Subject,
+		NotBefore:             precert.NotBefore,
+		NotAfter:              precert.NotAfter,
+		KeyUsage:              precert.KeyUsage,
+		BasicConstraintsValid: precert.BasicConstraintsValid,
 		IsCA:                        precert.IsCA,
 		MaxPathLen:                  precert.MaxPathLen,
 		MaxPathLenZero:              precert.MaxPathLenZero,

@@ -56,7 +56,7 @@ func New(key string, ad []byte) (*Standard, error) {
 			if err != nil {
 				return nil, err
 			}
-			key = strings.TrimSpace(string(data))
+			key = string(data)
 		default:
 			return nil, fmt.Errorf("unknown key prefix: %s", splitKey[0])
 		}

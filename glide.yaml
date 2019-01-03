@@ -1,6 +1,7 @@
 package: .
 import:
 - package: github.com/cloudflare/cfssl
+  version: 1.3.2
   subpackages:
   - csr
 - package: github.com/golang/glog
@@ -13,12 +14,14 @@ import:
   - pkg/installer
   - pkg/webhook
 - package: k8s.io/api
+  version: kubernetes-1.11.1
   subpackages:
   - admission/v1beta1
   - admissionregistration/v1beta1
   - certificates/v1beta1
   - core/v1
 - package: k8s.io/apimachinery
+  version: kubernetes-1.11.1
   subpackages:
   - pkg/api/resource
   - pkg/apis/meta/v1
@@ -26,9 +29,12 @@ import:
   - pkg/runtime/serializer
   - pkg/util/intstr
 - package: k8s.io/client-go
+  version: kubernetes-1.11.1
   subpackages:
   - kubernetes
   - rest
+- package: sigs.k8s.io/yaml
+  version: v1.0.0
 testImport:
 - package: github.com/onsi/ginkgo
   subpackages:

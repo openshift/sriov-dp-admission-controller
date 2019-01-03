@@ -105,28 +105,14 @@ func (srv *server) getURL(endpoint string) string {
 	return fmt.Sprintf("%s/api/v1/cfssl/%s", srv.URL, endpoint)
 }
 
-func (srv *server) createTransport() *http.Transport {
-	// Start with defaults from http.DefaultTransport
-	transport := &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: (&net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: 30 * time.Second,
-			DualStack: true,
-		}).DialContext,
-		MaxIdleConns:          100,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-	}
+func (srv *server) createTransport() (transport *http.Transport) {
+	transport = new(http.Transport)
 	// Setup HTTPS client
 	tlsConfig := srv.TLSConfig
 	tlsConfig.BuildNameToCertificate()
 	transport.TLSClientConfig = tlsConfig
 	// Setup Proxy
-	if srv.proxy != nil {
-		transport.Proxy = srv.proxy
-	}
+	transport.Proxy = srv.proxy
 	return transport
 }
 
