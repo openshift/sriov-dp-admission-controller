@@ -1,22 +1,16 @@
-FROM rhel:rhel7
+FROM openshift/origin-release:golang-1.10 as builder
 
 ADD . /usr/src/sriov-dp-admission-controller
 
-ENV HTTP_PROXY $http_proxy
-ENV HTTPS_PROXY $https_proxy
-ENV INSTALL_PKGS "git golang make"
-RUN yum install -y $INSTALL_PKGS && \
-    rpm -V $INSTALL_PKGS && \
-    cd /usr/src/sriov-dp-admission-controller && \
-    make clean && \
-    make build && \
-    cp build/webhook /usr/bin/ && \
-    cp build/webhook_installer /usr/bin/ && \
-    yum autoremove -y $INSTALL_PKGS && \
-    yum clean all && \
-    rm -rf /tmp/*
+WORKDIR /usr/src/sriov-dp-admission-controller
+RUN make clean && \
+    make build
 
 WORKDIR /
+
+FROM openshift/origin-base
+COPY --from=builder /usr/src/sriov-dp-admission-controller/build/webhook /usr/bin/
+COPY --from=builder /usr/src/sriov-dp-admission-controller/build/webhook_installer /usr/bin/
 
 LABEL io.k8s.display-name="SRIOV Device Plugin Admission Controller"
 
