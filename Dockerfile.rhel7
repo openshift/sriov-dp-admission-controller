@@ -3,15 +3,9 @@ FROM registry.svc.ci.openshift.org/ocp/builder:golang-1.10 AS builder
 ADD . /usr/src/sriov-dp-admission-controller
 
 WORKDIR /usr/src/sriov-dp-admission-controller
-RUN make clean && \
-    make build
 
 WORKDIR /
 
 FROM registry.svc.ci.openshift.org/ocp/4.0:base
-COPY --from=builder /usr/src/sriov-dp-admission-controller/build/webhook /usr/bin/
-COPY --from=builder /usr/src/sriov-dp-admission-controller/build/webhook_installer /usr/bin/
 
 LABEL io.k8s.display-name="SRIOV Device Plugin Admission Controller"
-
-CMD ["webhook"]
