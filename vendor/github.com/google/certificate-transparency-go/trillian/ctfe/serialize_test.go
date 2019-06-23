@@ -19,20 +19,20 @@ import (
 	"crypto/sha256"
 	"testing"
 
+	ct "github.com/google/certificate-transparency-go"
 	"github.com/google/certificate-transparency-go/tls"
 	"github.com/google/certificate-transparency-go/trillian/ctfe/testonly"
 	"github.com/google/certificate-transparency-go/trillian/testdata"
 	"github.com/google/certificate-transparency-go/x509"
 	"github.com/google/certificate-transparency-go/x509util"
+	"github.com/google/trillian/crypto"
 	"github.com/google/trillian/crypto/keys/pem"
 	"github.com/kylelemons/godebug/pretty"
-
-	ct "github.com/google/certificate-transparency-go"
 )
 
 func TestBuildV1MerkleTreeLeafForCert(t *testing.T) {
-	cert, err := x509util.CertificateFromPEM([]byte(testonly.LeafSignedByFakeIntermediateCertPEM))
-	if x509.IsFatal(err) {
+	cert, err := x509util.CertificateFromPEM(testonly.LeafSignedByFakeIntermediateCertPEM)
+	if err != nil {
 		t.Fatalf("failed to set up test cert: %v", err)
 	}
 
@@ -86,8 +86,10 @@ func TestBuildV1MerkleTreeLeafForCert(t *testing.T) {
 }
 
 func TestSignV1SCTForPrecertificate(t *testing.T) {
-	cert, err := x509util.CertificateFromPEM([]byte(testonly.PrecertPEMValid))
-	if x509.IsFatal(err) {
+	cert, err := x509util.CertificateFromPEM(testonly.PrecertPEMValid)
+	_, ok := err.(x509.NonFatalErrors)
+
+	if err != nil && !ok {
 		t.Fatalf("failed to set up test precert: %v", err)
 	}
 
@@ -145,18 +147,19 @@ func TestSignV1SCTForPrecertificate(t *testing.T) {
 }
 
 func TestSignV1TreeHead(t *testing.T) {
-	signer, err := pem.UnmarshalPrivateKey(testdata.DemoPrivateKey, testdata.DemoPrivateKeyPass)
+	privKey, err := pem.UnmarshalPrivateKey(testdata.DemoPrivateKey, testdata.DemoPrivateKeyPass)
 	if err != nil {
 		t.Fatalf("could not create signer: %v", err)
 	}
-	var cache SignatureCache
+	signer := crypto.NewSHA256Signer(privKey)
+	c := &LogContext{logID: 6962, signer: signer}
 
 	sth := ct.SignedTreeHead{
 		Version:   ct.V1,
 		TreeSize:  10,
 		Timestamp: 1512993312000,
 	}
-	if err := signV1TreeHead(signer, &sth, &cache); err != nil {
+	if err := c.signV1TreeHead(signer, &sth); err != nil {
 		t.Fatalf("signV1TreeHead()=%v; want nil", err)
 	}
 	prevSig := make([]byte, len(sth.TreeHeadSignature.Signature))
@@ -164,7 +167,7 @@ func TestSignV1TreeHead(t *testing.T) {
 
 	// Signing the same contents should get the same cached signature regardless.
 	for i := 0; i < 5; i++ {
-		if err := signV1TreeHead(signer, &sth, &cache); err != nil {
+		if err := c.signV1TreeHead(signer, &sth); err != nil {
 			t.Fatalf("signV1TreeHead()=%v; want nil", err)
 		}
 		sig := make([]byte, len(sth.TreeHeadSignature.Signature))
@@ -178,7 +181,7 @@ func TestSignV1TreeHead(t *testing.T) {
 	// But changing the contents does change the signature.
 	for i := 0; i < 5; i++ {
 		sth.TreeSize = uint64(11 + i)
-		if err := signV1TreeHead(signer, &sth, &cache); err != nil {
+		if err := c.signV1TreeHead(signer, &sth); err != nil {
 			t.Errorf("signV1TreeHead()=%v; want nil", err)
 		}
 		sig := make([]byte, len(sth.TreeHeadSignature.Signature))
@@ -190,7 +193,7 @@ func TestSignV1TreeHead(t *testing.T) {
 		prevSig := sig
 
 		// Repeating should again return the cached signature.
-		if err := signV1TreeHead(signer, &sth, &cache); err != nil {
+		if err := c.signV1TreeHead(signer, &sth); err != nil {
 			t.Errorf("signV1TreeHead(size=%d)=%v; want nil", sth.TreeSize, err)
 		}
 		sig = make([]byte, len(sth.TreeHeadSignature.Signature))
@@ -199,32 +202,36 @@ func TestSignV1TreeHead(t *testing.T) {
 			t.Fatalf("signV1TreeHead(size=%d).TreeHeadSignature mismatched, diff:\n%v", sth.TreeSize, diff)
 		}
 	}
+
 }
 
 func TestSignV1TreeHeadDifferentSigners(t *testing.T) {
-	signer1, err := pem.UnmarshalPrivateKey(testdata.DemoPrivateKey, testdata.DemoPrivateKeyPass)
+	privKey, err := pem.UnmarshalPrivateKey(testdata.DemoPrivateKey, testdata.DemoPrivateKeyPass)
 	if err != nil {
 		t.Fatalf("could not create signer1: %v", err)
 	}
+	signer1 := crypto.NewSHA256Signer(privKey)
+	c1 := &LogContext{logID: 6962, signer: signer1}
+
 	signer2, err := setupSigner(fakeSignature)
 	if err != nil {
 		t.Fatalf("could not create signer2: %v", err)
 	}
+	c2 := &LogContext{logID: 6963, signer: signer2}
 
-	var cache1, cache2 SignatureCache
 	sth := ct.SignedTreeHead{
 		Version:   ct.V1,
 		TreeSize:  10,
 		Timestamp: 1512993312000,
 	}
 
-	if err := signV1TreeHead(signer1, &sth, &cache1); err != nil {
+	if err := c1.signV1TreeHead(signer1, &sth); err != nil {
 		t.Fatalf("signV1TreeHead(signer1)=%v; want nil", err)
 	}
 	sig1 := make([]byte, len(sth.TreeHeadSignature.Signature))
 	copy(sig1, sth.TreeHeadSignature.Signature)
 
-	if err := signV1TreeHead(signer2, &sth, &cache2); err != nil {
+	if err := c2.signV1TreeHead(signer2, &sth); err != nil {
 		t.Fatalf("signV1TreeHead(signer2)=%v; want nil", err)
 	}
 	sig2 := make([]byte, len(sth.TreeHeadSignature.Signature))

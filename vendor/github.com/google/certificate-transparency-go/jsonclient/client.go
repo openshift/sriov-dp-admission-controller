@@ -53,12 +53,11 @@ type backoffer interface {
 // JSONClient provides common functionality for interacting with a JSON server
 // that uses cryptographic signatures.
 type JSONClient struct {
-	uri        string                // the base URI of the server. e.g. https://ct.googleapis/pilot
+	uri        string                // the base URI of the server. e.g. http://ct.googleapis/pilot
 	httpClient *http.Client          // used to interact with the server via HTTP
 	Verifier   *ct.SignatureVerifier // nil for no verification (e.g. no public key available)
 	logger     Logger                // interface to use for logging warnings and errors
 	backoff    backoffer             // object used to store and calculate backoff information
-	userAgent  string                // If set, this is sent as the UserAgent header.
 }
 
 // Logger is a simple logging interface used to log internal errors and warnings
@@ -76,8 +75,6 @@ type Options struct {
 	PublicKey string
 	// DER format public key to use for signature verification.
 	PublicKeyDER []byte
-	// UserAgent, if set, will be sent as the User-Agent header with each request.
-	UserAgent string
 }
 
 // ParsePublicKey parses and returns the public key contained in opts.
@@ -106,19 +103,6 @@ type basicLogger struct{}
 
 func (bl *basicLogger) Printf(msg string, args ...interface{}) {
 	log.Printf(msg, args...)
-}
-
-// RspError represents an error that occurred when processing a response from a server,
-// and also includes key details from the http.Response that triggered the error.
-type RspError struct {
-	Err        error
-	StatusCode int
-	Body       []byte
-}
-
-// Error formats the RspError instance, focusing on the error.
-func (e RspError) Error() string {
-	return e.Err.Error()
 }
 
 // New constructs a new JSONClient instance, for the given base URI, using the
@@ -152,19 +136,14 @@ func New(uri string, hc *http.Client, opts Options) (*JSONClient, error) {
 		Verifier:   verifier,
 		logger:     logger,
 		backoff:    &backoff{},
-		userAgent:  opts.UserAgent,
 	}, nil
-}
-
-// BaseURI returns the base URI that the JSONClient makes queries to.
-func (c *JSONClient) BaseURI() string {
-	return c.uri
 }
 
 // GetAndParse makes a HTTP GET call to the given path, and attempta to parse
 // the response as a JSON representation of the rsp structure.  Returns the
-// http.Response, the body of the response, and an error (which may be of
-// type RspError if the HTTP response was available).
+// http.Response, the body of the response, and an error.  Note that the
+// returned http.Response can be non-nil even when an error is returned,
+// in particular when the HTTP status is not OK or when the JSON parsing fails.
 func (c *JSONClient) GetAndParse(ctx context.Context, path string, params map[string]string, rsp interface{}) (*http.Response, []byte, error) {
 	if ctx == nil {
 		return nil, nil, errors.New("context.Context required")
@@ -179,9 +158,6 @@ func (c *JSONClient) GetAndParse(ctx context.Context, path string, params map[st
 	if err != nil {
 		return nil, nil, err
 	}
-	if len(c.userAgent) != 0 {
-		httpReq.Header.Set("User-Agent", c.userAgent)
-	}
 
 	httpRsp, err := ctxhttp.Do(ctx, c.httpClient, httpReq)
 	if err != nil {
@@ -192,15 +168,15 @@ func (c *JSONClient) GetAndParse(ctx context.Context, path string, params map[st
 	body, err := ioutil.ReadAll(httpRsp.Body)
 	httpRsp.Body.Close()
 	if err != nil {
-		return nil, nil, RspError{Err: fmt.Errorf("failed to read response body: %v", err), StatusCode: httpRsp.StatusCode, Body: body}
+		return httpRsp, body, fmt.Errorf("failed to read response body: %v", err)
 	}
 
 	if httpRsp.StatusCode != http.StatusOK {
-		return nil, nil, RspError{Err: fmt.Errorf("got HTTP Status %q", httpRsp.Status), StatusCode: httpRsp.StatusCode, Body: body}
+		return httpRsp, body, fmt.Errorf("got HTTP Status %q", httpRsp.Status)
 	}
 
 	if err := json.NewDecoder(bytes.NewReader(body)).Decode(rsp); err != nil {
-		return nil, nil, RspError{Err: err, StatusCode: httpRsp.StatusCode, Body: body}
+		return httpRsp, body, err
 	}
 
 	return httpRsp, body, nil
@@ -209,7 +185,9 @@ func (c *JSONClient) GetAndParse(ctx context.Context, path string, params map[st
 // PostAndParse makes a HTTP POST call to the given path, including the request
 // parameters, and attempts to parse the response as a JSON representation of
 // the rsp structure. Returns the http.Response, the body of the response, and
-// an error (which may be of type RspError if the HTTP response was available).
+// an error.  Note that the returned http.Response can be non-nil even when an
+// error is returned, in particular when the HTTP status is not OK or when the
+// JSON parsing fails.
 func (c *JSONClient) PostAndParse(ctx context.Context, path string, req, rsp interface{}) (*http.Response, []byte, error) {
 	if ctx == nil {
 		return nil, nil, errors.New("context.Context required")
@@ -224,9 +202,6 @@ func (c *JSONClient) PostAndParse(ctx context.Context, path string, req, rsp int
 	if err != nil {
 		return nil, nil, err
 	}
-	if len(c.userAgent) != 0 {
-		httpReq.Header.Set("User-Agent", c.userAgent)
-	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	httpRsp, err := ctxhttp.Do(ctx, c.httpClient, httpReq)
@@ -238,15 +213,12 @@ func (c *JSONClient) PostAndParse(ctx context.Context, path string, req, rsp int
 		httpRsp.Body.Close()
 	}
 	if err != nil {
-		if httpRsp != nil {
-			return nil, nil, RspError{StatusCode: httpRsp.StatusCode, Body: body, Err: err}
-		}
-		return nil, nil, err
+		return httpRsp, body, err
 	}
 
 	if httpRsp.StatusCode == http.StatusOK {
 		if err = json.Unmarshal(body, &rsp); err != nil {
-			return nil, nil, RspError{StatusCode: httpRsp.StatusCode, Body: body, Err: err}
+			return httpRsp, body, err
 		}
 	}
 	return httpRsp, body, nil
@@ -283,7 +255,7 @@ func (c *JSONClient) PostAndParseWithRetry(ctx context.Context, path string, req
 				return nil, nil, err
 			}
 			wait := c.backoff.set(nil)
-			c.logger.Printf("Request failed, backing-off on %s for %s: %s", c.uri, wait, err)
+			c.logger.Printf("Request failed, backing-off for %s: %s", wait, err)
 		} else {
 			switch {
 			case httpRsp.StatusCode == http.StatusOK:
@@ -307,10 +279,7 @@ func (c *JSONClient) PostAndParseWithRetry(ctx context.Context, path string, req
 				wait := c.backoff.set(backoff)
 				c.logger.Printf("Request failed, backing-off for %s: got HTTP status %s", wait, httpRsp.Status)
 			default:
-				return nil, nil, RspError{
-					StatusCode: httpRsp.StatusCode,
-					Body:       body,
-					Err:        fmt.Errorf("got HTTP status %q", httpRsp.Status)}
+				return httpRsp, body, fmt.Errorf("got HTTP Status %q", httpRsp.Status)
 			}
 		}
 		if err := c.waitForBackoff(ctx); err != nil {

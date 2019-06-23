@@ -75,7 +75,7 @@ func (rt testRoundTripper) RoundTrip(request *http.Request) (*http.Response, err
 		var chain []*x509.Certificate
 		for _, certBytes := range chainBytes.Chain {
 			cert, err := x509.ParseCertificate(certBytes)
-			if x509.IsFatal(err) {
+			if err != nil {
 				errStr := fmt.Sprintf("#%d: Could not parse certificate: %s", rt.testIndex, err.Error())
 				rt.t.Error(errStr)
 				return nil, errors.New(errStr)
@@ -104,7 +104,7 @@ func (rt testRoundTripper) RoundTrip(request *http.Request) (*http.Response, err
 			Proto:         request.Proto,
 			ProtoMajor:    request.ProtoMajor,
 			ProtoMinor:    request.ProtoMinor,
-			Body:          &bytesReadCloser{bytes.NewReader(validAddChainRsp())},
+			Body:          &bytesReadCloser{bytes.NewReader(validSCT())},
 			ContentLength: 0,
 			Request:       request,
 		}, nil
@@ -232,7 +232,7 @@ func (rt postTestRoundTripper) RoundTrip(request *http.Request) (*http.Response,
 
 	rspData := []byte("")
 	if strings.Contains(request.URL.Path, "/ct/v1/add-chain") {
-		rspData = validAddChainRsp()
+		rspData = validSCT()
 	}
 
 	// Return a response
@@ -248,24 +248,13 @@ func (rt postTestRoundTripper) RoundTrip(request *http.Request) (*http.Response,
 	}, nil
 }
 
-func validAddChainRsp() []byte {
+func validSCT() []byte {
 	var sct ct.SignedCertificateTimestamp
 	_, err := tls.Unmarshal(testdata.TestCertProof, &sct)
 	if err != nil {
 		panic(fmt.Sprintf("failed to tls-unmarshal test certificate proof: %v", err))
 	}
-	sig, err := tls.Marshal(sct.Signature)
-	if err != nil {
-		panic(fmt.Sprintf("failed to marshal signature: %v", err))
-	}
-	rsp := ct.AddChainResponse{
-		SCTVersion: sct.SCTVersion,
-		Timestamp:  sct.Timestamp,
-		ID:         sct.LogID.KeyID[:],
-		Extensions: base64.StdEncoding.EncodeToString(sct.Extensions),
-		Signature:  sig,
-	}
-	rspData, err := json.Marshal(rsp)
+	rspData, err := json.Marshal(sct)
 	if err != nil {
 		panic(fmt.Sprintf("failed to json-marshal test certificate proof: %v", err))
 	}
@@ -276,7 +265,7 @@ type newLoggerTestRoundTripper struct{}
 
 func (rt newLoggerTestRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
 	// Return a response
-	b := validAddChainRsp()
+	b := validSCT()
 	return &http.Response{
 		Status:        "200 OK",
 		StatusCode:    200,

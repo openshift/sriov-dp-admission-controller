@@ -196,13 +196,11 @@ func TestScannerEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	opts := ScannerOptions{
-		FetcherOptions: FetcherOptions{
-			BatchSize:     10,
-			ParallelFetch: 1,
-			StartIndex:    0,
-		},
-		Matcher:    &MatchSubjectRegex{regexp.MustCompile(".*\\.google\\.com"), nil},
-		NumWorkers: 1,
+		Matcher:       &MatchSubjectRegex{regexp.MustCompile(".*\\.google\\.com"), nil},
+		BatchSize:     10,
+		NumWorkers:    1,
+		ParallelFetch: 1,
+		StartIndex:    0,
 	}
 	scanner := NewScanner(logClient, opts)
 
@@ -210,19 +208,11 @@ func TestScannerEndToEnd(t *testing.T) {
 	var matchedPrecerts list.List
 
 	ctx := context.Background()
-	err = scanner.Scan(ctx, func(re *ct.RawLogEntry) {
+	err = scanner.Scan(ctx, func(e *ct.LogEntry) {
 		// Annoyingly we can't t.Fatal() in here, as this is run in another go
 		// routine
-		e, _ := re.ToLogEntry()
-		if e.X509Cert == nil {
-			return
-		}
 		matchedCerts.PushBack(*e.X509Cert)
-	}, func(re *ct.RawLogEntry) {
-		e, _ := re.ToLogEntry()
-		if e.X509Cert == nil {
-			return
-		}
+	}, func(e *ct.LogEntry) {
 		matchedPrecerts.PushBack(*e.Precert)
 	})
 
@@ -268,5 +258,8 @@ func TestDefaultScannerOptions(t *testing.T) {
 	}
 	if opts.StartIndex != 0 {
 		t.Fatalf("Expected StartIndex to be 0, but was %d", opts.StartIndex)
+	}
+	if opts.Quiet {
+		t.Fatal("Expected Quiet to be false.")
 	}
 }

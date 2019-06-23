@@ -21,6 +21,8 @@ Following is the example of multus config file, in `/etc/cni/net.d/`.
 "Note1":"NOTE: you can set clusterNetwork+defaultNetworks OR delegates!!",
     "clusterNetwork": "defaultCRD",
     "defaultNetworks": ["sidecarCRD", "flannel"],
+    "systemNamespaces": ["kube-system", "admin"],
+    "multusNamespace": "kube-system",
 "Note2":"NOTE: If you use clusterNetwork/defaultNetworks, delegates is ignored",
     "delegates": [{
         "type": "weave-net",
@@ -48,6 +50,8 @@ User should chose following parameters combination (`clusterNetwork`+`defaultNet
 
 * `clusterNetwork` (string, required): default CNI network for pods, used in kubernetes cluster (Pod IP and so on): name of network-attachment-definition, CNI json file name (without extention, .conf/.conflist) or directory for CNI config file
 * `defaultNetworks` ([]string, required): default CNI network attachment: name of network-attachment-definition, CNI json file name (without extention, .conf/.conflist) or directory for CNI config file
+* `systemNamespaces` ([]string, optional): list of namespaces for Kubernetes system (namespaces listed here will not have `defaultNetworks` added)
+* `multusNamespace` (string, optional): namespace for `clusterNetwork`/`defaultNetworks`
 * `delegates` ([]map,required): number of delegate details in the Multus
 
 ### Network selection flow of clusterNetwork/defaultNetworks
@@ -244,4 +248,29 @@ pod/samplepod created
 [user@kube-master ~]$ kubectl get pods -n development
 NAME        READY   STATUS    RESTARTS   AGE
 samplepod   1/1     Running   0          31s
+```
+
+### Specify default cluster network in Pod annotations
+
+Users may also specify the default network for any given pod (via annotation), for cases where there are multiple cluster networks available within a Kubernetes cluster.
+
+Example use cases may include:
+
+1. During a migration from one default network to another (e.g. from Flannel to Calico), it may be practical if both network solutions are able to operate in parallel. Users can then control which network a pod should attach to during the transition period.
+2. Some users may deploy multiple cluster networks for the sake of their security considerations, and may desire to specify the default network for individual pods.
+
+Follow these steps to specify the default network on a pod-by-pod basis:
+
+1. First, you need to define all your cluster networks as network-attachment-definition objects.
+
+2. Next, you can specify the network you want in pods with the `v1.multus-cni.io/default-network` annotation. Pods which do not specify this annotation will keep using the CNI as defined in the Multus config file.
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+name: pod-example
+annotations:
+ v1.multus-cni.io/default-network: calico-conf
+...
 ```

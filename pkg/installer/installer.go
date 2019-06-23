@@ -15,6 +15,7 @@
 package installer
 
 import (
+	"io/ioutil"
 	"strings"
 	"time"
 
@@ -54,25 +55,26 @@ func generateCSR() ([]byte, []byte, error) {
 func getSignedCertificate(request []byte) ([]byte, error) {
 	csrName := strings.Join([]string{prefix, "csr"}, "-")
 	csr, err := clientset.CertificatesV1beta1().CertificateSigningRequests().Get(csrName, metav1.GetOptions{})
-	if csr != nil && err == nil {
-		glog.Infof("CSR %s already exists, trying to reuse it", csrName)
-	} else {
-		glog.Infof("creating CSR %s", csrName)
-		/* build Kubernetes CSR object */
-		csr := &v1beta1.CertificateSigningRequest{}
-		csr.ObjectMeta.Name = csrName
-		csr.ObjectMeta.Namespace = namespace
-		csr.Spec.Request = request
-		csr.Spec.Groups = []string{"system:authenticated"}
-		csr.Spec.Usages = []v1beta1.KeyUsage{v1beta1.UsageDigitalSignature, v1beta1.UsageServerAuth, v1beta1.UsageKeyEncipherment}
-
-		/* push CSR to Kubernetes API server */
-		csr, err = clientset.CertificatesV1beta1().CertificateSigningRequests().Create(csr)
-		if err != nil {
-			return nil, errors.Wrap(err, "error creating CSR in Kubernetes API: %s")
-		}
-		glog.Infof("CSR pushed to the Kubernetes API")
+	if csr != nil || err == nil {
+		glog.Infof("CSR %s already exists, removing it first", csrName)
+		clientset.CertificatesV1beta1().CertificateSigningRequests().Delete(csrName, &metav1.DeleteOptions{})
 	}
+
+	glog.Infof("creating new CSR %s", csrName)
+	/* build Kubernetes CSR object */
+	csr = &v1beta1.CertificateSigningRequest{}
+	csr.ObjectMeta.Name = csrName
+	csr.ObjectMeta.Namespace = namespace
+	csr.Spec.Request = request
+	csr.Spec.Groups = []string{"system:authenticated"}
+	csr.Spec.Usages = []v1beta1.KeyUsage{v1beta1.UsageDigitalSignature, v1beta1.UsageServerAuth, v1beta1.UsageKeyEncipherment}
+
+	/* push CSR to Kubernetes API server */
+	csr, err = clientset.CertificatesV1beta1().CertificateSigningRequests().Create(csr)
+	if err != nil {
+		return nil, errors.Wrap(err, "error creating CSR in Kubernetes API: %s")
+	}
+	glog.Infof("CSR pushed to the Kubernetes API")
 
 	if csr.Status.Certificate != nil {
 		glog.Infof("using already issued certificate for CSR %s", csrName)
@@ -112,20 +114,14 @@ func getSignedCertificate(request []byte) ([]byte, error) {
 	return nil, errors.New("error getting certificate from the API server: request timed out - verify that Kubernetes certificate signer is setup, more at https://kubernetes.io/docs/tasks/tls/managing-tls-in-a-cluster/#a-note-to-cluster-administrators")
 }
 
-func createSecret(certificate, key []byte) error {
-	secretName := strings.Join([]string{prefix, "secret"}, "-")
-	removeSecretIfExists(secretName)
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: secretName,
-		},
-		Data: map[string][]byte{
-			"cert.pem": certificate,
-			"key.pem":  key,
-		},
+func writeToFile(certificate, key []byte, certFilename, keyFilename string) error {
+	if err := ioutil.WriteFile("/etc/tls/"+certFilename, certificate, 0644); err != nil {
+		return err
 	}
-	_, err := clientset.CoreV1().Secrets(namespace).Create(secret)
-	return err
+	if err := ioutil.WriteFile("/etc/tls/"+keyFilename, key, 0644); err != nil {
+		return err
+	}
+	return nil
 }
 
 func createMutatingWebhookConfiguration(certificate []byte) error {
@@ -261,12 +257,11 @@ func Install(k8sNamespace, namePrefix string) {
 	}
 	glog.Infof("signed certificate successfully obtained")
 
-	/* create secret and push it to the API */
-	err = createSecret(certificate, key)
+	err = writeToFile(certificate, key, "tls.crt", "tls.key")
 	if err != nil {
-		glog.Fatalf("error creating secret: %s", err)
+		glog.Fatalf("error writing certificate and key to files: %s", err)
 	}
-	glog.Infof("secret successfully created")
+	glog.Infof("certificate and key written to files")
 
 	/* create webhook configurations */
 	err = createMutatingWebhookConfiguration(certificate)

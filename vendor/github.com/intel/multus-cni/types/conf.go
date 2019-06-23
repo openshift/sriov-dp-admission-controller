@@ -27,10 +27,11 @@ import (
 )
 
 const (
-	defaultCNIDir             = "/var/lib/cni/multus"
-	defaultConfDir            = "/etc/cni/multus/net.d"
-	defaultBinDir             = "/opt/cni/bin"
+	defaultCNIDir                 = "/var/lib/cni/multus"
+	defaultConfDir                = "/etc/cni/multus/net.d"
+	defaultBinDir                 = "/opt/cni/bin"
 	defaultReadinessIndicatorFile = ""
+	defaultMultusNamespace         = "kube-system"
 )
 
 func LoadDelegateNetConfList(bytes []byte, delegateConf *DelegateNetConf) error {
@@ -93,7 +94,7 @@ func LoadDelegateNetConf(bytes []byte, net *NetworkSelectionElement, deviceID st
 	return delegateConf, nil
 }
 
-func LoadCNIRuntimeConf(args *skel.CmdArgs, k8sArgs *K8sArgs, ifName string, rc *RuntimeConfig) (*libcni.RuntimeConf, error) {
+func CreateCNIRuntimeConf(args *skel.CmdArgs, k8sArgs *K8sArgs, ifName string, rc *RuntimeConfig) *libcni.RuntimeConf {
 
 	logging.Debugf("LoadCNIRuntimeConf: %v, %v, %s, %v", args, k8sArgs, ifName, rc)
 	// In part, adapted from K8s pkg/kubelet/dockershim/network/cni/cni.go#buildCNIRuntimeConf
@@ -116,21 +117,22 @@ func LoadCNIRuntimeConf(args *skel.CmdArgs, k8sArgs *K8sArgs, ifName string, rc 
 			"portMappings": rc.PortMaps,
 		}
 	}
-	return rt, nil
+	return rt
 }
 
 func LoadNetworkStatus(r types.Result, netName string, defaultNet bool) (*NetworkStatus, error) {
 	logging.Debugf("LoadNetworkStatus: %v, %s, %t", r, netName, defaultNet)
 
-	// Convert whatever the IPAM result was into the current Result type
-	result, err := current.NewResultFromResult(r)
-	if err != nil {
-		return nil, logging.Errorf("error convert the type.Result to current.Result: %v", err)
-	}
-
 	netstatus := &NetworkStatus{}
 	netstatus.Name = netName
 	netstatus.Default = defaultNet
+
+	// Convert whatever the IPAM result was into the current Result type
+	result, err := current.NewResultFromResult(r)
+	if err != nil {
+		logging.Errorf("error convert the type.Result to current.Result: %v", err)
+		return netstatus, nil
+	}
 
 	for _, ifs := range result.Interfaces {
 		//Only pod interfaces can have sandbox information
@@ -215,6 +217,14 @@ func LoadNetConf(bytes []byte) (*NetConf, error) {
 		netconf.ReadinessIndicatorFile = defaultReadinessIndicatorFile
 	}
 
+	if len(netconf.SystemNamespaces) == 0 {
+		netconf.SystemNamespaces = []string{"kube-system"}
+	}
+
+	if netconf.MultusNamespace == "" {
+		netconf.MultusNamespace = defaultMultusNamespace
+	}
+
 	// get RawDelegates and put delegates field
 	if netconf.ClusterNetwork == "" {
 		// for Delegates
@@ -264,4 +274,14 @@ func delegateAddDeviceID(inBytes []byte, deviceID string) ([]byte, error) {
 		return nil, logging.Errorf("delegateAddDeviceID: failed to re-marshal Spec.Config: %v", err)
 	}
 	return configBytes, nil
+}
+
+// CheckSystemNamespaces checks whether given namespace is in systemNamespaces or not.
+func CheckSystemNamespaces(namespace string, systemNamespaces []string) bool {
+	for _, nsname := range systemNamespaces {
+		if namespace == nsname {
+			return true
+		}
+	}
+	return false
 }

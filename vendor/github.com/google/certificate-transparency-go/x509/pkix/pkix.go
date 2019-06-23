@@ -7,12 +7,14 @@
 package pkix
 
 import (
+	// START CT CHANGES
 	"encoding/hex"
 	"fmt"
-	"math/big"
-	"time"
 
 	"github.com/google/certificate-transparency-go/asn1"
+	// END CT CHANGES
+	"math/big"
+	"time"
 )
 
 // AlgorithmIdentifier represents the ASN.1 structure of the same name. See RFC
@@ -96,7 +98,7 @@ func (r RDNSequence) String() string {
 type RelativeDistinguishedNameSET []AttributeTypeAndValue
 
 // AttributeTypeAndValue mirrors the ASN.1 structure of the same name in
-// https://tools.ietf.org/html/rfc5280#section-4.1.2.4
+// http://tools.ietf.org/html/rfc5280#section-4.1.2.4
 type AttributeTypeAndValue struct {
 	Type  asn1.ObjectIdentifier
 	Value interface{}

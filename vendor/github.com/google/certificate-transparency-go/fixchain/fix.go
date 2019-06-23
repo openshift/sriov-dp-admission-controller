@@ -231,14 +231,14 @@ func (fix *toFix) getIntermediates(url string) ([]*x509.Certificate, *FixError) 
 	}
 
 	icert, err := x509.ParseCertificate(body)
-	if x509.IsFatal(err) {
+	if err != nil {
 		s, _ := pem.Decode(body)
 		if s != nil {
 			icert, err = x509.ParseCertificate(s.Bytes)
 		}
 	}
 
-	if x509.IsFatal(err) {
+	if err != nil {
 		return nil, &FixError{
 			Type:  ParseFailure,
 			Cert:  fix.cert,

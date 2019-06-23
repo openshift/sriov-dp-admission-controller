@@ -17,11 +17,9 @@ package ctfe
 import (
 	"encoding/base64"
 	"encoding/pem"
-	"strings"
 	"testing"
 	"time"
 
-	"github.com/google/certificate-transparency-go/asn1"
 	"github.com/google/certificate-transparency-go/trillian/ctfe/testonly"
 	"github.com/google/certificate-transparency-go/x509"
 	"github.com/google/certificate-transparency-go/x509/pkix"
@@ -35,13 +33,13 @@ func wipeExtensions(cert *x509.Certificate) *x509.Certificate {
 
 func makePoisonNonCritical(cert *x509.Certificate) *x509.Certificate {
 	// Invalid as a pre-cert because poison extension needs to be marked as critical.
-	cert.Extensions = []pkix.Extension{{Id: x509.OIDExtensionCTPoison, Critical: false, Value: asn1.NullBytes}}
+	cert.Extensions = []pkix.Extension{{Id: ctPoisonExtensionOID, Critical: false, Value: asn1NullBytes}}
 	return cert
 }
 
 func makePoisonNonNull(cert *x509.Certificate) *x509.Certificate {
 	// Invalid as a pre-cert because poison extension is not ASN.1 NULL value.
-	cert.Extensions = []pkix.Extension{{Id: x509.OIDExtensionCTPoison, Critical: false, Value: []byte{0x42, 0x42, 0x42}}}
+	cert.Extensions = []pkix.Extension{{Id: ctPoisonExtensionOID, Critical: false, Value: []byte{0x42, 0x42, 0x42}}}
 	return cert
 }
 
@@ -83,20 +81,18 @@ func TestIsPrecertificate(t *testing.T) {
 
 	for _, test := range tests {
 		gotPrecert, err := IsPrecertificate(test.cert)
-		t.Run(test.desc, func(t *testing.T) {
-			if err != nil {
-				if !test.wantErr {
-					t.Errorf("IsPrecertificate()=%v,%v; want %v,nil", gotPrecert, err, test.wantPrecert)
-				}
-				return
+		if err != nil {
+			if !test.wantErr {
+				t.Errorf("IsPrecertificate(%v)=%v,%v; want %v,nil", test.desc, gotPrecert, err, test.wantPrecert)
 			}
-			if test.wantErr {
-				t.Errorf("IsPrecertificate()=%v,%v; want _,%v", gotPrecert, err, test.wantErr)
-			}
-			if gotPrecert != test.wantPrecert {
-				t.Errorf("IsPrecertificate()=%v,%v; want %v,nil", gotPrecert, err, test.wantPrecert)
-			}
-		})
+			continue
+		}
+		if test.wantErr {
+			t.Errorf("IsPrecertificate(%v)=%v,%v; want _,%v", test.desc, gotPrecert, err, test.wantErr)
+		}
+		if gotPrecert != test.wantPrecert {
+			t.Errorf("IsPrecertificate(%v)=%v,%v; want %v,nil", test.desc, gotPrecert, err, test.wantPrecert)
+		}
 	}
 }
 
@@ -160,41 +156,25 @@ func TestValidateChain(t *testing.T) {
 			wantPathLen: 3,
 		},
 		{
-			desc:        "chain-with-invalid-nameconstraints",
-			chain:       pemsToDERChain(t, []string{testonly.LeafCertPEM, testonly.FakeIntermediateWithInvalidNameConstraintsCertPEM}),
-			wantPathLen: 3,
-		},
-		{
-			desc:        "chain-of-len-4",
-			chain:       pemFileToDERChain(t, "../testdata/subleaf.chain"),
-			wantPathLen: 4,
-		},
-		{
-			desc:    "misordered-chain-of-len-4",
-			chain:   pemFileToDERChain(t, "../testdata/subleaf.misordered.chain"),
+			desc:    "chain-with-invalid-nameconstraints",
+			chain:   pemsToDERChain(t, []string{testonly.LeafCertPEM, testonly.FakeIntermediateWithInvalidNameConstraintsCertPEM}),
 			wantErr: true,
 		},
 	}
 	for _, test := range tests {
-		t.Run(test.desc, func(t *testing.T) {
-			gotPath, err := ValidateChain(test.chain, validateOpts)
-			if err != nil {
-				if !test.wantErr {
-					t.Errorf("ValidateChain()=%v,%v; want _,nil", gotPath, err)
-				}
-				return
+		gotPath, err := ValidateChain(test.chain, validateOpts)
+		if err != nil {
+			if !test.wantErr {
+				t.Errorf("ValidateChain(%v)=%v,%v; want _,nil", test.desc, gotPath, err)
 			}
-			if test.wantErr {
-				t.Errorf("ValidateChain()=%v,%v; want _,non-nil", gotPath, err)
-				return
-			}
-			if len(gotPath) != test.wantPathLen {
-				t.Errorf("|ValidateChain()|=%d; want %d", len(gotPath), test.wantPathLen)
-				for _, c := range gotPath {
-					t.Logf("Subject: %s Issuer: %s", x509util.NameToString(c.Subject), x509util.NameToString(c.Issuer))
-				}
-			}
-		})
+			continue
+		}
+		if test.wantErr {
+			t.Errorf("ValidateChain(%v)=%v,%v; want _,non-nil", test.desc, gotPath, err)
+		}
+		if len(gotPath) != test.wantPathLen {
+			t.Errorf("|ValidateChain(%v)|=%d; want %d", test.desc, len(gotPath), test.wantPathLen)
+		}
 	}
 }
 
@@ -209,7 +189,7 @@ func TestCA(t *testing.T) {
 	}
 	chain := pemsToDERChain(t, []string{testonly.LeafSignedByFakeIntermediateCertPEM, testonly.FakeIntermediateCertPEM})
 	leaf, err := x509.ParseCertificate(chain[0])
-	if x509.IsFatal(err) {
+	if err != nil {
 		t.Fatalf("Failed to parse golden certificate DER: %v", err)
 	}
 	t.Logf("Cert expiry date: %v", leaf.NotAfter)
@@ -241,19 +221,17 @@ func TestCA(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		t.Run(test.desc, func(t *testing.T) {
-			validateOpts.acceptOnlyCA = test.caOnly
-			gotPath, err := ValidateChain(test.chain, validateOpts)
-			if err != nil {
-				if !test.wantErr {
-					t.Errorf("ValidateChain()=%v,%v; want _,nil", gotPath, err)
-				}
-				return
+		validateOpts.acceptOnlyCA = test.caOnly
+		gotPath, err := ValidateChain(test.chain, validateOpts)
+		if err != nil {
+			if !test.wantErr {
+				t.Errorf("ValidateChain(%v)=%v,%v; want _,nil", test.desc, gotPath, err)
 			}
-			if test.wantErr {
-				t.Errorf("ValidateChain()=%v,%v; want _,non-nil", gotPath, err)
-			}
-		})
+			continue
+		}
+		if test.wantErr {
+			t.Errorf("ValidateChain(%v)=%v,%v; want _,non-nil", test.desc, gotPath, err)
+		}
 	}
 }
 
@@ -301,97 +279,22 @@ func TestNotAfterRange(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		t.Run(test.desc, func(t *testing.T) {
-			if !test.notAfterStart.IsZero() {
-				validateOpts.notAfterStart = &test.notAfterStart
+		if !test.notAfterStart.IsZero() {
+			validateOpts.notAfterStart = &test.notAfterStart
+		}
+		if !test.notAfterLimit.IsZero() {
+			validateOpts.notAfterLimit = &test.notAfterLimit
+		}
+		gotPath, err := ValidateChain(test.chain, validateOpts)
+		if err != nil {
+			if !test.wantErr {
+				t.Errorf("ValidateChain(%v)=%v,%v; want _,nil", test.desc, gotPath, err)
 			}
-			if !test.notAfterLimit.IsZero() {
-				validateOpts.notAfterLimit = &test.notAfterLimit
-			}
-			gotPath, err := ValidateChain(test.chain, validateOpts)
-			if err != nil {
-				if !test.wantErr {
-					t.Errorf("ValidateChain()=%v,%v; want _,nil", gotPath, err)
-				}
-				return
-			}
-			if test.wantErr {
-				t.Errorf("ValidateChain()=%v,%v; want _,non-nil", gotPath, err)
-			}
-		})
-	}
-}
-
-func TestRejectExpiredUnexpired(t *testing.T) {
-	fakeCARoots := NewPEMCertPool()
-	// Validity period: Jul 11, 2016 - Jul 11, 2017.
-	if !fakeCARoots.AppendCertsFromPEM([]byte(testonly.FakeCACertPEM)) {
-		t.Fatal("failed to load fake root")
-	}
-	// Validity period: May 13, 2016 - Jul 12, 2019.
-	chain := pemsToDERChain(t, []string{testonly.LeafSignedByFakeIntermediateCertPEM, testonly.FakeIntermediateCertPEM})
-	validateOpts := CertValidationOpts{
-		trustedRoots: fakeCARoots,
-		extKeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
-	}
-
-	for _, tc := range []struct {
-		desc            string
-		rejectExpired   bool
-		rejectUnexpired bool
-		now             time.Time
-		wantErr         string
-	}{
-		{desc: "no-reject"},
-		{
-			desc:          "reject-expired-pass",
-			rejectExpired: true,
-			now:           time.Date(2017, 1, 1, 0, 0, 0, 0, time.UTC),
-		},
-		{
-			desc:          "reject-expired-after",
-			rejectExpired: true,
-			now:           time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC),
-			wantErr:       "expired or is not yet valid",
-		},
-		{
-			desc:          "reject-expired-before",
-			rejectExpired: true,
-			now:           time.Date(1999, 1, 1, 0, 0, 0, 0, time.UTC),
-			wantErr:       "expired or is not yet valid",
-		},
-		{
-			desc:            "reject-non-expired-pass-after",
-			rejectUnexpired: true,
-			now:             time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC),
-		},
-		{
-			desc:            "reject-non-expired-pass-before",
-			rejectUnexpired: true,
-			now:             time.Date(1999, 1, 1, 0, 0, 0, 0, time.UTC),
-		},
-		{
-			desc:            "reject-non-expired",
-			rejectUnexpired: true,
-			now:             time.Date(2017, 1, 1, 0, 0, 0, 0, time.UTC),
-			wantErr:         "only expired certificates",
-		},
-	} {
-		t.Run(tc.desc, func(t *testing.T) {
-			validateOpts.currentTime = tc.now
-			validateOpts.rejectExpired = tc.rejectExpired
-			validateOpts.rejectUnexpired = tc.rejectUnexpired
-			_, err := ValidateChain(chain, validateOpts)
-			if err != nil {
-				if len(tc.wantErr) == 0 {
-					t.Errorf("ValidateChain()=_,%v; want _,nil", err)
-				} else if !strings.Contains(err.Error(), tc.wantErr) {
-					t.Errorf("ValidateChain()=_,%v; want err containing %q", err, tc.wantErr)
-				}
-			} else if len(tc.wantErr) != 0 {
-				t.Errorf("ValidateChain()=_,nil; want err containing %q", tc.wantErr)
-			}
-		})
+			continue
+		}
+		if test.wantErr {
+			t.Errorf("ValidateChain(%v)=%v,%v; want _,non-nil", test.desc, gotPath, err)
+		}
 	}
 }
 
@@ -416,20 +319,15 @@ func pemToCert(t *testing.T, pemData string) *x509.Certificate {
 	}
 
 	cert, err := x509.ParseCertificate(bytes.Bytes)
-	if x509.IsFatal(err) {
-		t.Fatal(err)
+	if err != nil {
+		_, ok := err.(x509.NonFatalErrors)
+		if !ok {
+			t.Fatal(err)
+			return nil
+		}
 	}
 
 	return cert
-}
-
-func pemFileToDERChain(t *testing.T, filename string) [][]byte {
-	t.Helper()
-	rawChain, err := x509util.ReadPossiblePEMFile(filename, "CERTIFICATE")
-	if err != nil {
-		t.Fatalf("failed to load testdata: %v", err)
-	}
-	return rawChain
 }
 
 // Validate a chain including a pre-issuer as produced by Google's Compliance Monitor.

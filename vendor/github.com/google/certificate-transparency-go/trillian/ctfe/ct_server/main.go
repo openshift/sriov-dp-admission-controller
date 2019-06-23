@@ -22,7 +22,6 @@ import (
 	"os"
 	"os/signal"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -33,13 +32,9 @@ import (
 	"github.com/google/certificate-transparency-go/trillian/ctfe/configpb"
 	"github.com/google/certificate-transparency-go/trillian/util"
 	"github.com/google/trillian"
-	"github.com/google/trillian/monitoring/opencensus"
 	"github.com/google/trillian/monitoring/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/rs/cors"
-	"github.com/tomasen/realip"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/balancer/roundrobin"
 	"google.golang.org/grpc/naming"
 
 	// Register PEMKeyFile, PrivateKey and PKCS11Config ProtoHandlers
@@ -60,12 +55,6 @@ var (
 	etcdServers        = flag.String("etcd_servers", "", "A comma-separated list of etcd servers")
 	etcdHTTPService    = flag.String("etcd_http_service", "trillian-ctfe-http", "Service name to announce our HTTP endpoint under")
 	etcdMetricsService = flag.String("etcd_metrics_service", "trillian-ctfe-metrics-http", "Service name to announce our HTTP metrics endpoint under")
-	tracing            = flag.Bool("tracing", false, "If true opencensus Stackdriver tracing will be enabled. See https://opencensus.io/.")
-	tracingProjectID   = flag.String("tracing_project_id", "", "project ID to pass to stackdriver. Can be empty for GCP, consult docs for other platforms.")
-	tracingPercent     = flag.Int("tracing_percent", 0, "Percent of requests to be traced. Zero is a special case to use the DefaultSampler")
-	quotaRemote        = flag.Bool("quota_remote", true, "Enable requesting of quota for IP address sending incoming requests")
-	quotaIntermediate  = flag.Bool("quota_intermediate", true, "Enable requesting of quota for intermediate certificates in sumbmitted chains")
-	handlerPrefix      = flag.String("handler_prefix", "", "If set e.g. to '/logs' will prefix all handlers that don't define a custom prefix")
 )
 
 func main() {
@@ -83,12 +72,9 @@ func main() {
 	// in flags). The single-backend config is converted to a multi config so
 	// they can be treated the same.
 	if len(*rpcBackend) > 0 {
-		var cfgs []*configpb.LogConfig
-		if cfgs, err = ctfe.LogConfigFromFile(*logConfig); err == nil {
-			cfg = ctfe.ToMultiLogConfig(cfgs, *rpcBackend)
-		}
+		cfg, err = readCfg(*logConfig, *rpcBackend)
 	} else {
-		cfg, err = ctfe.MultiLogConfigFromFile(*logConfig)
+		cfg, err = readMultiCfg(*logConfig)
 	}
 
 	if err != nil {
@@ -108,7 +94,7 @@ func main() {
 		metricsAt = *httpEndpoint
 	}
 
-	dialOpts := []grpc.DialOption{grpc.WithInsecure()}
+	var res naming.Resolver
 	if len(*etcdServers) > 0 {
 		// Use etcd to provide endpoint resolution.
 		cfg := clientv3.Config{Endpoints: strings.Split(*etcdServers, ","), DialTimeout: 5 * time.Second}
@@ -117,7 +103,7 @@ func main() {
 			glog.Exitf("Failed to connect to etcd at %v: %v", *etcdServers, err)
 		}
 		etcdRes := &etcdnaming.GRPCResolver{Client: client}
-		dialOpts = append(dialOpts, grpc.WithBalancer(grpc.RoundRobin(etcdRes)))
+		res = etcdRes
 
 		// Also announce ourselves.
 		updateHTTP := naming.Update{Op: naming.Add, Addr: *httpEndpoint}
@@ -135,26 +121,23 @@ func main() {
 			glog.Infof("Removing our presence in %v with %+v", *etcdMetricsService, byeMetrics)
 			etcdRes.Update(ctx, *etcdMetricsService, byeMetrics)
 		}()
-	} else if strings.Contains(*rpcBackend, ",") {
-		glog.Infof("Using FixedBackendResolver")
-		// Use a fixed endpoint resolution that just returns the addresses configured on the command line.
-		res := util.FixedBackendResolver{}
-		dialOpts = append(dialOpts, grpc.WithBalancer(grpc.RoundRobin(res)))
 	} else {
-		glog.Infof("Using regular DNS resolver")
-		dialOpts = append(dialOpts, grpc.WithBalancerName(roundrobin.Name))
+		// Use a fixed endpoint resolution that just returns the addresses configured on the command line.
+		res = util.FixedBackendResolver{}
 	}
 
 	// Dial all our log backends.
 	clientMap := make(map[string]trillian.TrillianLogClient)
 	for _, be := range beMap {
 		glog.Infof("Dialling backend: %v", be)
+		bal := grpc.RoundRobin(res)
+		opts := []grpc.DialOption{grpc.WithInsecure(), grpc.WithBalancer(bal)}
 		if len(beMap) == 1 {
 			// If there's only one of them we use the blocking option as we can't
 			// serve anything until connected.
-			dialOpts = append(dialOpts, grpc.WithBlock())
+			opts = append(opts, grpc.WithBlock())
 		}
-		conn, err := grpc.Dial(be.BackendSpec, dialOpts...)
+		conn, err := grpc.Dial(be.BackendSpec, opts...)
 		if err != nil {
 			glog.Exitf("Could not dial RPC server: %v: %v", be, err)
 		}
@@ -162,29 +145,14 @@ func main() {
 		clientMap[be.Name] = trillian.NewTrillianLogClient(conn)
 	}
 
-	// Allow cross-origin requests to all handlers registered on corsMux.
-	// This is safe for CT log handlers because the log is public and
-	// unauthenticated so cross-site scripting attacks are not a concern.
-	corsMux := http.NewServeMux()
-	corsHandler := cors.AllowAll().Handler(corsMux)
-	http.Handle("/", corsHandler)
-
 	// Register handlers for all the configured logs using the correct RPC
 	// client.
 	for _, c := range cfg.LogConfigs.Config {
-		if err := setupAndRegister(ctx, clientMap[c.LogBackendName], *rpcDeadline, c, corsMux, *handlerPrefix); err != nil {
+		setupAndRegister(ctx, clientMap[c.LogBackendName], *rpcDeadline, c)
+		if err != nil {
 			glog.Exitf("Failed to set up log instance for %+v: %v", cfg, err)
 		}
 	}
-
-	// Return a 200 on the root, for GCE default health checking :/
-	corsMux.HandleFunc("/", func(resp http.ResponseWriter, req *http.Request) {
-		if req.URL.Path == "/" {
-			resp.WriteHeader(http.StatusOK)
-		} else {
-			resp.WriteHeader(http.StatusNotFound)
-		}
-	})
 
 	if metricsAt != *httpEndpoint {
 		// Run a separate handler for metrics.
@@ -204,16 +172,12 @@ func main() {
 		// Regularly update the internal STH for each log so our metrics stay up-to-date with any tree head
 		// changes that are not triggered by us.
 		for _, c := range cfg.LogConfigs.Config {
-			// TODO(pavelkalinnikov): Update mirror STHs when there is a way to.
-			if c.IsMirror {
-				continue
-			}
 			ticker := time.NewTicker(*getSTHInterval)
 			go func(c *configpb.LogConfig) {
 				glog.Infof("start internal get-sth operations on log %v (%d)", c.Prefix, c.LogId)
 				for t := range ticker.C {
 					glog.V(1).Infof("tick at %v: force internal get-sth for log %v (%d)", t, c.Prefix, c.LogId)
-					if err := ctfe.PingTreeHead(ctx, clientMap[c.LogBackendName], c.LogId, c.Prefix); err != nil {
+					if _, err := ctfe.GetTreeHead(ctx, clientMap[c.LogBackendName], c.LogId, c.Prefix); err != nil {
 						glog.Warningf("failed to retrieve tree head for log %v (%d): %v", c.Prefix, c.LogId, err)
 					}
 				}
@@ -221,36 +185,13 @@ func main() {
 		}
 	}
 
-	// If we're enabling tracing we need to use an instrumented http.Handler.
-	var handler http.Handler
-	if *tracing {
-		handler, err = opencensus.EnableHTTPServerTracing(*tracingProjectID, *tracingPercent)
-		if err != nil {
-			glog.Exitf("Failed to initialize stackdriver / opencensus tracing: %v", err)
-		}
-	}
-
 	// Bring up the HTTP server and serve until we get a signal not to.
-	srv := http.Server{Addr: *httpEndpoint, Handler: handler}
-	shutdownWG := new(sync.WaitGroup)
 	go awaitSignal(func() {
-		shutdownWG.Add(1)
-		defer shutdownWG.Done()
-		// Allow 60s for any pending requests to finish then terminate any stragglers
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second*60)
-		defer cancel()
-		glog.Info("Shutting down HTTP server...")
-		srv.Shutdown(ctx)
-		glog.Info("HTTP server shutdown")
+		os.Exit(1)
 	})
-
-	err = srv.ListenAndServe()
-	if err != http.ErrServerClosed {
-		glog.Warningf("Server exited: %v", err)
-	}
-	// Wait will only block if the function passed to awaitSignal was called,
-	// in which case it'll block until the HTTP server has gracefully shutdown
-	shutdownWG.Wait()
+	server := http.Server{Addr: *httpEndpoint, Handler: nil}
+	err = server.ListenAndServe()
+	glog.Warningf("Server exited: %v", err)
 	glog.Flush()
 }
 
@@ -269,45 +210,32 @@ func awaitSignal(doneFn func()) {
 	doneFn()
 }
 
-func setupAndRegister(ctx context.Context, client trillian.TrillianLogClient, deadline time.Duration, cfg *configpb.LogConfig, mux *http.ServeMux, globalHandlerPrefix string) error {
-	vCfg, err := ctfe.ValidateLogConfig(cfg)
-	if err != nil {
-		return err
-	}
-
-	opts := ctfe.InstanceOptions{
-		Validated:     vCfg,
-		Client:        client,
-		Deadline:      deadline,
-		MetricFactory: prometheus.MetricFactory{},
-		RequestLog:    new(ctfe.DefaultRequestLog),
-	}
-	if *quotaRemote {
-		glog.Info("Enabling quota for requesting IP")
-		opts.RemoteQuotaUser = realip.FromRequest
-	}
-	if *quotaIntermediate {
-		glog.Info("Enabling quota for intermediate certificates")
-		opts.CertificateQuotaUser = ctfe.QuotaUserForCert
-	}
-	// Full handler pattern will be of the form "/logs/yyz/ct/v1/add-chain", where "/logs" is the
-	// HandlerPrefix and "yyz" is the c.Prefix for this particular log. Use the default
-	// HandlerPrefix unless the log config overrides it. The custom prefix in
-	// the log configuration intended for use in migration scenarios where logs
-	// have an existing URL path that differs from the global one. For example
-	// if all new logs are served on "/logs/log/..." and a previously existing
-	// log is at "/log/..." this is now supported.
-	lhp := globalHandlerPrefix
-	if ohPrefix := cfg.OverrideHandlerPrefix; len(ohPrefix) > 0 {
-		glog.Infof("Log with prefix: %s is using a custom HandlerPrefix: %s", cfg.Prefix, ohPrefix)
-		lhp = "/" + strings.Trim(ohPrefix, "/")
-	}
-	handlers, err := ctfe.SetUpInstance(ctx, opts)
+func setupAndRegister(ctx context.Context, client trillian.TrillianLogClient, deadline time.Duration, cfg *configpb.LogConfig) error {
+	opts := ctfe.InstanceOptions{Deadline: deadline, MetricFactory: prometheus.MetricFactory{}, RequestLog: new(ctfe.DefaultRequestLog)}
+	handlers, err := ctfe.SetUpInstance(ctx, client, cfg, opts)
 	if err != nil {
 		return err
 	}
 	for path, handler := range *handlers {
-		mux.Handle(lhp+path, handler)
+		http.Handle(path, handler)
 	}
 	return nil
+}
+
+func readMultiCfg(filename string) (*configpb.LogMultiConfig, error) {
+	cfg, err := ctfe.MultiLogConfigFromFile(filename)
+	if err != nil {
+		return nil, err
+	}
+
+	return cfg, nil
+}
+
+func readCfg(filename string, backendSpec string) (*configpb.LogMultiConfig, error) {
+	cfg, err := ctfe.LogConfigFromFile(filename)
+	if err != nil {
+		return nil, err
+	}
+
+	return ctfe.ToMultiLogConfig(cfg, backendSpec), nil
 }

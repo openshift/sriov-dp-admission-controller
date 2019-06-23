@@ -57,8 +57,12 @@ func processChains(file string, fl *fixchain.FixAndLog) {
 		var chain []*x509.Certificate
 		for _, derBytes := range m.Chain {
 			cert, err := x509.ParseCertificate(derBytes)
-			if x509.IsFatal(err) {
-				log.Fatalf("can't parse certificate: %s %#v", err, derBytes)
+			switch err.(type) {
+			case nil, x509.NonFatalErrors:
+				// ignore
+			default:
+				log.Fatalf("can't parse certificate: %s %#v",
+					err, derBytes)
 			}
 
 			chain = append(chain, cert)
@@ -119,7 +123,7 @@ func main() {
 
 	limiter := ratelimiter.NewLimiter(1000)
 	c := &http.Client{}
-	logClient, err := client.New(logURL, c, jsonclient.Options{UserAgent: "ct-go-fixchain/1.0"})
+	logClient, err := client.New(logURL, c, jsonclient.Options{})
 	if err != nil {
 		log.Fatalf("failed to create log client: %v", err)
 	}

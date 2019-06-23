@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package client_test
+package client
 
 import (
 	"context"
@@ -26,10 +26,8 @@ import (
 	"github.com/golang/protobuf/ptypes"
 	tspb "github.com/golang/protobuf/ptypes/timestamp"
 	ct "github.com/google/certificate-transparency-go"
-	"github.com/google/certificate-transparency-go/client"
 	"github.com/google/certificate-transparency-go/client/configpb"
 	"github.com/google/certificate-transparency-go/testdata"
-	"github.com/google/certificate-transparency-go/x509"
 	"github.com/google/certificate-transparency-go/x509util"
 )
 
@@ -202,7 +200,7 @@ func TestNewTemporalLogClient(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		_, err := client.NewTemporalLogClient(test.cfg, nil)
+		_, err := NewTemporalLogClient(test.cfg, nil)
 		if err != nil {
 			if test.wantErr == "" {
 				t.Errorf("NewTemporalLogClient(%+v)=nil,%v; want _,nil", test.cfg, err)
@@ -315,7 +313,7 @@ func TestIndexByDate(t *testing.T) {
 		{cfg: boundedCfg, when: time.Date(2015, 9, 19, 11, 00, 00, 00, time.UTC), wantErr: true},
 	}
 	for _, test := range tests {
-		tlc, err := client.NewTemporalLogClient(test.cfg, nil)
+		tlc, err := NewTemporalLogClient(test.cfg, nil)
 		if err != nil {
 			t.Errorf("NewTemporalLogClient(%+v)=nil, %v; want _,nil", test.cfg, err)
 			continue
@@ -351,17 +349,17 @@ func TestTemporalAddChain(t *testing.T) {
 	}))
 	defer hs.Close()
 
-	cert, err := x509util.CertificateFromPEM([]byte(testdata.TestCertPEM))
+	cert, err := x509util.CertificateFromPEM(testdata.TestCertPEM)
 	if err != nil {
 		t.Fatalf("Failed to parse certificate from PEM: %v", err)
 	}
 	certChain := []ct.ASN1Cert{{Data: cert.Raw}}
-	precert, err := x509util.CertificateFromPEM([]byte(testdata.TestPreCertPEM))
-	if x509.IsFatal(err) {
+	precert, err := x509util.CertificateFromPEM(testdata.TestPreCertPEM)
+	if err != nil {
 		t.Fatalf("Failed to parse pre-certificate from PEM: %v", err)
 	}
-	issuer, err := x509util.CertificateFromPEM([]byte(testdata.CACertPEM))
-	if x509.IsFatal(err) {
+	issuer, err := x509util.CertificateFromPEM(testdata.CACertPEM)
+	if err != nil {
 		t.Fatalf("Failed to parse issuer certificate from PEM: %v", err)
 	}
 	precertChain := []ct.ASN1Cert{{Data: precert.Raw}, {Data: issuer.Raw}}
@@ -425,7 +423,7 @@ func TestTemporalAddChain(t *testing.T) {
 
 	ctx := context.Background()
 	for _, test := range tests {
-		tlc, err := client.NewTemporalLogClient(test.cfg, nil)
+		tlc, err := NewTemporalLogClient(test.cfg, nil)
 		if err != nil {
 			t.Errorf("NewTemporalLogClient(%+v)=nil, %v; want _,nil", test.cfg, err)
 			continue
@@ -466,7 +464,7 @@ func TestTemporalAddChainErrors(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	tlc, err := client.NewTemporalLogClient(cfg, nil)
+	tlc, err := NewTemporalLogClient(cfg, nil)
 	if err != nil {
 		t.Fatalf("NewTemporalLogClient(%+v)=nil, %v; want _,nil", cfg, err)
 	}
