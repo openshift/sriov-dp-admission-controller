@@ -1,11 +1,15 @@
-FROM registry.svc.ci.openshift.org/ocp/builder:golang-1.10 AS builder
+FROM openshift/origin-release:golang-1.10 as builder
 
-ADD . /usr/src/sriov-dp-admission-controller
+ENV PKG_NAME=github.com/intel/network-resources-injector
+ENV PKG_PATH=$GOPATH/src/$PKG_NAME
+WORKDIR $PKG_PATH
 
-WORKDIR /usr/src/sriov-dp-admission-controller
+COPY . $PKG_PATH/
+RUN go install ./cmd/...
 
-WORKDIR /
+FROM openshift/origin-base
+COPY --from=builder /go/bin/webhook /go/bin/installer /usr/bin/
 
-FROM registry.svc.ci.openshift.org/ocp/4.0:base
+LABEL io.k8s.display-name="SRIOV Admission Controller"
 
-LABEL io.k8s.display-name="SRIOV Device Plugin Admission Controller"
+CMD ["webhook"]
