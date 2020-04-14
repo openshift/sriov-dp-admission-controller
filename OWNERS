@@ -5,7 +5,6 @@ reviewers:
   - squeed
   - fepan
   - s1061123
-  - jeremyeder
   - vpickard
 approvers:
   - zshi-redhat
@@ -14,5 +13,6 @@ approvers:
   - squeed
   - fepan
   - s1061123
-  - jeremyeder
   - vpickard
+component: "Networking"
+subcomponent: "SR-IOV"
