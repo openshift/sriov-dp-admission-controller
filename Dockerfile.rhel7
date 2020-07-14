@@ -1,4 +1,4 @@
-FROM openshift/origin-release:golang-1.10 as builder
+FROM openshift/origin-release:golang-1.13 as builder
 ADD . /usr/src/network-resources-injector
 RUN cd /usr/src/network-resources-injector && make
 

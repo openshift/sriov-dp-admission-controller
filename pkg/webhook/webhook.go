@@ -15,6 +15,7 @@
 package webhook
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -23,7 +24,7 @@ import (
 	"strings"
 
 	"github.com/golang/glog"
-	"github.com/intel/multus-cni/types"
+	"gopkg.in/intel/multus-cni.v3/types"
 	cniv1 "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/apis/k8s.cni.cncf.io/v1"
 	"github.com/pkg/errors"
 
@@ -231,7 +232,7 @@ func parsePodNetworkSelectionElement(selection, defaultNamespace string) (*types
 
 func getNetworkAttachmentDefinition(namespace, name string) (*cniv1.NetworkAttachmentDefinition, error) {
 	path := fmt.Sprintf("/apis/k8s.cni.cncf.io/v1/namespaces/%s/network-attachment-definitions/%s", namespace, name)
-	rawNetworkAttachmentDefinition, err := clientset.ExtensionsV1beta1().RESTClient().Get().AbsPath(path).DoRaw()
+	rawNetworkAttachmentDefinition, err := clientset.ExtensionsV1beta1().RESTClient().Get().AbsPath(path).DoRaw(context.TODO())
 	if err != nil {
 		err := errors.Wrapf(err, "could not get Network Attachment Definition %s/%s", namespace, name)
 		glog.Error(err)
@@ -271,17 +272,17 @@ func patchEmptyResources(patch []jsonPatchOperation, containerIndex uint, key st
 
 func addVolDownwardAPI(patch []jsonPatchOperation) []jsonPatchOperation {
 	labels := corev1.ObjectFieldSelector{
-		FieldPath:"metadata.labels",
+		FieldPath: "metadata.labels",
 	}
 	dAPILabels := corev1.DownwardAPIVolumeFile{
-		Path: "labels",
+		Path:     "labels",
 		FieldRef: &labels,
 	}
 	annotations := corev1.ObjectFieldSelector{
-		FieldPath:"metadata.annotations",
+		FieldPath: "metadata.annotations",
 	}
 	dAPIAnnotations := corev1.DownwardAPIVolumeFile{
-		Path: "annotations",
+		Path:     "annotations",
 		FieldRef: &annotations,
 	}
 	dAPIItems := []corev1.DownwardAPIVolumeFile{dAPILabels, dAPIAnnotations}
@@ -292,14 +293,14 @@ func addVolDownwardAPI(patch []jsonPatchOperation) []jsonPatchOperation {
 		DownwardAPI: &dAPIVolSource,
 	}
 	vol := corev1.Volume{
-		Name: "podnetinfo",
+		Name:         "podnetinfo",
 		VolumeSource: volSource,
 	}
 
 	patch = append(patch, jsonPatchOperation{
 		Operation: "add",
 		Path:      "/spec/volumes/-",
-		Value:    vol,
+		Value:     vol,
 	})
 
 	return patch
@@ -308,15 +309,15 @@ func addVolDownwardAPI(patch []jsonPatchOperation) []jsonPatchOperation {
 func addVolumeMount(patch []jsonPatchOperation) []jsonPatchOperation {
 
 	vm := corev1.VolumeMount{
-		Name: "podnetinfo",
-		ReadOnly: false,
+		Name:      "podnetinfo",
+		ReadOnly:  false,
 		MountPath: "/etc/podnetinfo",
 	}
 
 	patch = append(patch, jsonPatchOperation{
 		Operation: "add",
 		Path:      "/spec/containers/0/volumeMounts/-", // NOTE: in future we may want to patch specific container (not always the first one)
-		Value:      vm,
+		Value:     vm,
 	})
 
 	return patch
@@ -424,6 +425,10 @@ func MutateHandler(w http.ResponseWriter, req *http.Request) {
 
 			patchBytes, _ := json.Marshal(patch)
 			ar.Response.Patch = patchBytes
+			ar.Response.PatchType = func() *v1beta1.PatchType {
+				pt := v1beta1.PatchTypeJSONPatch
+				return &pt
+			}()
 		}
 	} else {
 		/* network annotation not provided or empty */
