@@ -1,4 +1,4 @@
-// Copyright 2016 Google Inc. All Rights Reserved.
+// Copyright 2016 Google LLC. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -26,21 +26,22 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/coreos/etcd/clientv3"
-	etcdnaming "github.com/coreos/etcd/clientv3/naming"
 	"github.com/golang/glog"
 	"github.com/google/certificate-transparency-go/trillian/ctfe"
 	"github.com/google/certificate-transparency-go/trillian/ctfe/configpb"
-	"github.com/google/certificate-transparency-go/trillian/util"
 	"github.com/google/trillian"
 	"github.com/google/trillian/monitoring/opencensus"
 	"github.com/google/trillian/monitoring/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/cors"
 	"github.com/tomasen/realip"
+	"go.etcd.io/etcd/clientv3"
+	etcdnaming "go.etcd.io/etcd/clientv3/naming"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/balancer/roundrobin"
 	"google.golang.org/grpc/naming"
+	"google.golang.org/grpc/resolver"
+	"google.golang.org/grpc/resolver/manual"
 
 	// Register PEMKeyFile, PrivateKey and PKCS11Config ProtoHandlers
 	_ "github.com/google/trillian/crypto/keys/der/proto"
@@ -68,6 +69,8 @@ var (
 	quotaIntermediate  = flag.Bool("quota_intermediate", true, "Enable requesting of quota for intermediate certificates in sumbmitted chains")
 	handlerPrefix      = flag.String("handler_prefix", "", "If set e.g. to '/logs' will prefix all handlers that don't define a custom prefix")
 )
+
+const unknownRemoteUser = "UNKNOWN_REMOTE"
 
 // nolint:staticcheck
 func main() {
@@ -138,10 +141,19 @@ func main() {
 			etcdRes.Update(ctx, *etcdMetricsService, byeMetrics)
 		}()
 	} else if strings.Contains(*rpcBackend, ",") {
-		glog.Infof("Using FixedBackendResolver")
-		// Use a fixed endpoint resolution that just returns the addresses configured on the command line.
-		res := util.FixedBackendResolver{}
-		dialOpts = append(dialOpts, grpc.WithBalancer(grpc.RoundRobin(res)))
+		// This should probably not be used in production. Either use etcd or a gRPC
+		// load balancer. It's only used by the integration tests.
+		glog.Warning("Multiple RPC backends from flags not recommended for production. Should probably be using etcd or a gRPC load balancer / proxy.")
+		res, cleanup := manual.GenerateAndRegisterManualResolver()
+		defer cleanup()
+		backends := strings.Split(*rpcBackend, ",")
+		addrs := make([]resolver.Address, 0, len(backends))
+		for _, backend := range backends {
+			addrs = append(addrs, resolver.Address{Addr: backend, Type: resolver.Backend})
+		}
+		res.InitialState(resolver.State{Addresses: addrs})
+		resolver.SetDefaultScheme(res.Scheme())
+		dialOpts = append(dialOpts, grpc.WithBalancerName(roundrobin.Name))
 	} else {
 		glog.Infof("Using regular DNS resolver")
 		dialOpts = append(dialOpts, grpc.WithBalancerName(roundrobin.Name))
@@ -276,7 +288,13 @@ func setupAndRegister(ctx context.Context, client trillian.TrillianLogClient, de
 	}
 	if *quotaRemote {
 		glog.Info("Enabling quota for requesting IP")
-		opts.RemoteQuotaUser = realip.FromRequest
+		opts.RemoteQuotaUser = func(r *http.Request) string {
+			var remoteUser = realip.FromRequest(r)
+			if len(remoteUser) == 0 {
+				return unknownRemoteUser
+			}
+			return remoteUser
+		}
 	}
 	if *quotaIntermediate {
 		glog.Info("Enabling quota for intermediate certificates")

@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// +build darwin dragonfly freebsd linux,!appengine netbsd openbsd windows plan9 solaris
+// +build aix darwin dragonfly freebsd linux,!appengine netbsd openbsd windows plan9 solaris
 
 package terminal
 
@@ -82,6 +82,14 @@ var keyPressTests = []struct {
 		line: "ba",
 	},
 	{
+		in:   "a\006b\r", // ^F
+		line: "ab",
+	},
+	{
+		in:   "a\002b\r", // ^B
+		line: "ba",
+	},
+	{
 		in:   "a\177b\r", // backspace
 		line: "b",
 	},
@@ -90,6 +98,12 @@ var keyPressTests = []struct {
 	},
 	{
 		in: "\x1b[B\r", // down
+	},
+	{
+		in: "\016\r", // ^P
+	},
+	{
+		in: "\014\r", // ^N
 	},
 	{
 		in:   "line\x1b[A\x1b[B\r", // up then down
@@ -202,6 +216,16 @@ var keyPressTests = []struct {
 		line: "a",
 		err:  ErrPasteIndicator,
 	},
+	{
+		// Ctrl-C terminates readline
+		in:  "\003",
+		err: io.EOF,
+	},
+	{
+		// Ctrl-C at the end of line also terminates readline
+		in:  "a\003\r",
+		err: io.EOF,
+	},
 }
 
 func TestKeyPresses(t *testing.T) {
@@ -225,6 +249,49 @@ func TestKeyPresses(t *testing.T) {
 			}
 			if err != test.err {
 				t.Errorf("Error resulting from test %d (%d bytes per read) was '%v', expected '%v'", i, j, err, test.err)
+				break
+			}
+		}
+	}
+}
+
+var renderTests = []struct {
+	in       string
+	received string
+	err      error
+}{
+	{
+		// Cursor move after keyHome (left 4) then enter (right 4, newline)
+		in:       "abcd\x1b[H\r",
+		received: "> abcd\x1b[4D\x1b[4C\r\n",
+	},
+	{
+		// Write, home, prepend, enter. Prepends rewrites the line.
+		in: "cdef\x1b[Hab\r",
+		received: "> cdef" + // Initial input
+			"\x1b[4Da" + // Move cursor back, insert first char
+			"cdef" + // Copy over original string
+			"\x1b[4Dbcdef" + // Repeat for second char with copy
+			"\x1b[4D" + // Put cursor back in position to insert again
+			"\x1b[4C\r\n", // Put cursor at the end of the line and newline.
+	},
+}
+
+func TestRender(t *testing.T) {
+	for i, test := range renderTests {
+		for j := 1; j < len(test.in); j++ {
+			c := &MockTerminal{
+				toSend:       []byte(test.in),
+				bytesPerRead: j,
+			}
+			ss := NewTerminal(c, "> ")
+			_, err := ss.ReadLine()
+			if err != test.err {
+				t.Errorf("Error resulting from test %d (%d bytes per read) was '%v', expected '%v'", i, j, err, test.err)
+				break
+			}
+			if test.received != string(c.received) {
+				t.Errorf("Results rendered from test %d (%d bytes per read) was '%s', expected '%s'", i, j, c.received, test.received)
 				break
 			}
 		}
@@ -274,18 +341,32 @@ func TestTerminalSetSize(t *testing.T) {
 }
 
 func TestReadPasswordLineEnd(t *testing.T) {
-	var tests = []struct {
+	type testType struct {
 		input string
 		want  string
-	}{
-		{"\n", ""},
+	}
+	var tests = []testType{
 		{"\r\n", ""},
 		{"test\r\n", "test"},
+		{"test\r", "test"},
+		{"test\n", "test"},
 		{"testtesttesttes\n", "testtesttesttes"},
 		{"testtesttesttes\r\n", "testtesttesttes"},
 		{"testtesttesttesttest\n", "testtesttesttesttest"},
 		{"testtesttesttesttest\r\n", "testtesttesttesttest"},
+		{"\btest", "test"},
+		{"t\best", "est"},
+		{"te\bst", "tst"},
+		{"test\b", "tes"},
+		{"test\b\r\n", "tes"},
+		{"test\b\n", "tes"},
+		{"test\b\r", "tes"},
 	}
+	eol := "\n"
+	if runtime.GOOS == "windows" {
+		eol = "\r"
+	}
+	tests = append(tests, testType{eol, ""})
 	for _, test := range tests {
 		buf := new(bytes.Buffer)
 		if _, err := buf.WriteString(test.input); err != nil {

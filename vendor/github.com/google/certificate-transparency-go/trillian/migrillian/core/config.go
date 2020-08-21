@@ -1,4 +1,4 @@
-// Copyright 2018 Google Inc. All Rights Reserved.
+// Copyright 2018 Google LLC. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,22 +19,25 @@ import (
 	"fmt"
 	"io/ioutil"
 
-	"github.com/golang/protobuf/proto"
-	"github.com/google/certificate-transparency-go/trillian/ctfe"
 	"github.com/google/certificate-transparency-go/trillian/migrillian/configpb"
+	"google.golang.org/protobuf/encoding/prototext"
+	"google.golang.org/protobuf/proto"
 )
 
 // LoadConfigFromFile reads MigrillianConfig from the given filename, which
 // should contain text-protobuf encoded configuration data.
 func LoadConfigFromFile(filename string) (*configpb.MigrillianConfig, error) {
-	text, err := ioutil.ReadFile(filename)
+	cfgBytes, err := ioutil.ReadFile(filename)
 	if err != nil {
 		return nil, err
 	}
 	var cfg configpb.MigrillianConfig
-	if err := proto.UnmarshalText(string(text), &cfg); err != nil {
-		return nil, fmt.Errorf("failed to parse config: %v", err)
+	if txtErr := prototext.Unmarshal(cfgBytes, &cfg); txtErr != nil {
+		if binErr := proto.Unmarshal(cfgBytes, &cfg); binErr != nil {
+			return nil, fmt.Errorf("failed to parse MigrillianConfig from %q as text protobuf (%v) or binary protobuf (%v)", filename, txtErr, binErr)
+		}
 	}
+
 	return &cfg, nil
 }
 
@@ -46,8 +49,6 @@ func ValidateMigrationConfig(cfg *configpb.MigrationConfig) error {
 		return errors.New("missing CT log URI")
 	case cfg.PublicKey == nil:
 		return errors.New("missing public key")
-	case len(cfg.LogBackendName) == 0:
-		return errors.New("missing log backend name")
 	case cfg.LogId <= 0:
 		return errors.New("log ID must be positive")
 	case cfg.BatchSize <= 0:
@@ -63,31 +64,19 @@ func ValidateMigrationConfig(cfg *configpb.MigrationConfig) error {
 }
 
 // ValidateConfig verifies that MigrillianConfig is correct. In particular:
-// - The log backends have distinct non-empty names and backend specs.
 // - Migration configs are valid (as per ValidateMigrationConfig).
-// - Migration configs specify backend names present in the set of backends.
-// - Each migration config has a unique (backend, tree ID) pair.
-// Returns a map from log backend names to the corresponding LogBackend.
-func ValidateConfig(cfg *configpb.MigrillianConfig) (ctfe.LogBackendMap, error) {
-	lbm, err := ctfe.BuildLogBackendMap(cfg.Backends)
-	if err != nil {
-		return nil, err
-	}
-	// Check that logs all reference a defined backend and there are no duplicate
-	// log IDs per backend. Apply other MigrationConfig specific checks.
-	logIDs := make(map[string]bool)
+// - Each migration config has a unique log ID.
+func ValidateConfig(cfg *configpb.MigrillianConfig) error {
+	// Validate each MigrationConfig, and ensure that log IDs are unique.
+	logIDs := make(map[int64]bool)
 	for _, mc := range cfg.MigrationConfigs.Config {
 		if err := ValidateMigrationConfig(mc); err != nil {
-			return nil, fmt.Errorf("MigrationConfig: %v: %v", err, mc)
+			return fmt.Errorf("MigrationConfig: %v: %v", err, mc)
 		}
-		if _, ok := lbm[mc.LogBackendName]; !ok {
-			return nil, fmt.Errorf("undefined backend %q: %v", mc.LogBackendName, mc)
+		if ok := logIDs[mc.LogId]; ok {
+			return fmt.Errorf("duplicate tree ID %d: %v", mc.LogId, mc)
 		}
-		key := fmt.Sprintf("%s-%d", mc.LogBackendName, mc.LogId)
-		if ok := logIDs[key]; ok {
-			return nil, fmt.Errorf("duplicate tree ID %d: %v", mc.LogId, mc)
-		}
-		logIDs[key] = true
+		logIDs[mc.LogId] = true
 	}
-	return lbm, nil
+	return nil
 }

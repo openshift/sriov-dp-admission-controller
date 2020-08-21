@@ -1,4 +1,4 @@
-// Copyright 2018 Google Inc. All Rights Reserved.
+// Copyright 2018 Google LLC. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,6 +24,7 @@ import (
 	ct "github.com/google/certificate-transparency-go"
 	"github.com/google/trillian"
 	"github.com/google/trillian/types"
+	"google.golang.org/protobuf/encoding/prototext"
 )
 
 type contextKey string
@@ -128,7 +129,7 @@ func getSignedLogRoot(ctx context.Context, client trillian.TrillianLogClient, lo
 		req.ChargeTo = appendUserCharge(req.ChargeTo, quotaUser)
 	}
 
-	glog.V(2).Infof("%s: GetSTH => grpc.GetLatestSignedLogRoot %+v", prefix, req)
+	glog.V(2).Infof("%s: GetSTH => grpc.GetLatestSignedLogRoot %+v", prefix, prototext.Format(&req))
 	rsp, err := client.GetLatestSignedLogRoot(ctx, &req)
 	glog.V(2).Infof("%s: GetSTH <= grpc.GetLatestSignedLogRoot err=%v", prefix, err)
 	if err != nil {

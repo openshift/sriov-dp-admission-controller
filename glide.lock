@@ -1,5 +1,5 @@
-hash: a2b9002c89d7ea8c925be0c2efd2b4d7c8ab069129628ab03571645e17173ea1
-updated: 2019-11-08T12:07:00.511117566-05:00
+hash: 5135868da3b4ac2b0b5c958eb02947752d0b0f4fe65afe11311b23a12eef29ad
+updated: 2020-08-21T04:25:32.213489383-04:00
 imports:
 - name: github.com/cloudflare/cfssl
   version: 2185c182e6bad3bf99f55ca6f6af0027124c112d
@@ -11,7 +11,7 @@ imports:
   - helpers/derhelpers
   - log
 - name: github.com/containernetworking/cni
-  version: a2da8f8d7fd8e6dc25f336408a8ac86f050fbd88
+  version: 6fc72a49e9ad357698b64634d60e0a83300284bf
   subpackages:
   - libcni
   - pkg/invoke
@@ -19,13 +19,14 @@ imports:
   - pkg/types
   - pkg/types/020
   - pkg/types/current
+  - pkg/utils
   - pkg/version
 - name: github.com/davecgh/go-spew
   version: 782f4967f2dc4564575ca782fe2d04090b5faca8
   subpackages:
   - spew
 - name: github.com/fsnotify/fsnotify
-  version: 4bf2d1fec78374803a39307bfb8d340688f4f28e
+  version: 45d7d09e39ef4ac08d493309fa031790c15bfe8a
 - name: github.com/gogo/protobuf
   version: 342cbe0a04158f6dcb03ca0079991a51a4248c02
   subpackages:
@@ -42,7 +43,7 @@ imports:
   - ptypes/duration
   - ptypes/timestamp
 - name: github.com/google/certificate-transparency-go
-  version: e800fea617e4831778235fa2ff0231d4d58a16d0
+  version: b45213476483eb1ba7d4c41628606f2d91f7aef2
   subpackages:
   - asn1
   - tls
@@ -64,9 +65,9 @@ imports:
 - name: github.com/json-iterator/go
   version: ab8a2e0c74be9d3be70b3184d9acc634935ded82
 - name: github.com/k8snetworkplumbingwg/network-attachment-definition-client
-  version: 4c57cd5732f3a6cafdcece50d899e3ca93f3bad8
+  version: 37f83d1996bc1bd973e03365224808ff3f298ddf
   subpackages:
-  - artifacts
+  - pkg/apis/k8s.cni.cncf.io
   - pkg/apis/k8s.cni.cncf.io/v1
 - name: github.com/modern-go/concurrent
   version: bacd9c7ef1dd9b15be4a9909b8ac7a4e313eec94
@@ -75,7 +76,7 @@ imports:
 - name: github.com/pkg/errors
   version: ba968bfe8b2f7e042a574c888954fccecfa385b4
 - name: golang.org/x/crypto
-  version: de0752318171da717af4ce24d0a2e8626afaeb11
+  version: 123391ffb6de907695e1066dc40c1ff09322aeb6
   subpackages:
   - cryptobyte
   - cryptobyte/asn1
@@ -134,7 +135,7 @@ imports:
   subpackages:
   - rate
 - name: google.golang.org/appengine
-  version: 16bce7d3dc4e458f2f6f56a1349cbbfcdc8a8fdf
+  version: 54a98f90d1c46b7731eb8fb305d2a321c30ef610
   subpackages:
   - internal
   - internal/base
