@@ -1,4 +1,4 @@
-// Copyright 2019 Google Inc. All Rights Reserved.
+// Copyright 2019 Google LLC. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/golang/glog"
 	"github.com/google/certificate-transparency-go/client"
 	"github.com/google/certificate-transparency-go/ctpolicy"
 	"github.com/google/certificate-transparency-go/jsonclient"
@@ -41,6 +42,8 @@ var (
 	rspsCounter   monitoring.Counter   // logurl, ep, sc => value
 	errCounter    monitoring.Counter   // logurl, ep, status => value
 	logRspLatency monitoring.Histogram // logurl, ep => value
+	// Per-log
+	lastGetRootsSuccess monitoring.Gauge // Unix time
 )
 
 // distInitMetrics initializes all the exported metrics.
@@ -49,6 +52,7 @@ func distInitMetrics(mf monitoring.MetricFactory) {
 	rspsCounter = mf.NewCounter("http_rsps", "Number of responses", "logurl", "ep", "httpstatus")
 	errCounter = mf.NewCounter("err_count", "Number of errors", "logurl", "ep", "errtype")
 	logRspLatency = mf.NewHistogram("http_log_latency", "Latency of responses in seconds", "logurl", "ep")
+	lastGetRootsSuccess = mf.NewGauge("last_get_roots_success", "Unix timestamp for last successful get-roots request", "logurl")
 }
 
 const (
@@ -146,6 +150,7 @@ func (d *Distributor) RefreshRoots(ctx context.Context) map[string]error {
 		// Roots get update even if some returned roots couldn't get parsed.
 		if r.Roots != nil {
 			freshRoots[r.LogURL] = r.Roots
+			lastGetRootsSuccess.Set(float64(time.Now().Unix()), r.LogURL)
 		}
 	}
 
@@ -163,13 +168,6 @@ func (d *Distributor) RefreshRoots(ctx context.Context) map[string]error {
 	}
 
 	return errors
-}
-
-// IsRootDataFull returns true if root certificates have been obtained for all Logs.
-func (d *Distributor) isRootDataFull() bool {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	return d.rootDataFull
 }
 
 // incRspsCounter extracts HTTP status code and increments corresponding rspsCounter.
@@ -193,10 +191,13 @@ func incErrCounter(logURL string, endpoint string, rspErr error) {
 	err, ok := rspErr.(client.RspError)
 	switch {
 	case !ok:
+		glog.Errorf("unknown_error (%s, %s) => %v", logURL, endpoint, rspErr)
 		errCounter.Inc(logURL, endpoint, "unknown_error")
 	case err.Err != nil && err.StatusCode == http.StatusOK:
+		glog.Errorf("invalid_sct (%s, %s) => HTTP details: status=%d, body:\n%s", logURL, endpoint, err.StatusCode, err.Body)
 		errCounter.Inc(logURL, endpoint, "invalid_sct")
 	case err.Err != nil: // err.StatusCode != http.StatusOK.
+		glog.Errorf("connection_error (%s, %s) => HTTP details: status=%d, body:\n%s", logURL, endpoint, err.StatusCode, err.Body)
 		errCounter.Inc(logURL, endpoint, "connection_error")
 	}
 }
@@ -248,29 +249,31 @@ func (d *Distributor) addSomeChain(ctx context.Context, rawChain [][]byte, loadP
 		return nil, fmt.Errorf("distributor unable to process empty chain")
 	}
 
-	var parsedChain []*x509.Certificate
-	var compatibleLogs loglist2.LogList
-
-	d.mu.RLock()
-	vOpts := ctfe.NewCertValidationOpts(d.rootPool, time.Time{}, false, false, nil, nil, false, nil)
-	rootedChain, err := ctfe.ValidateChain(rawChain, vOpts)
-
-	if err == nil {
-		parsedChain = rootedChain
-		compatibleLogs = d.usableLl.Compatible(rootedChain[0], rootedChain[len(rootedChain)-1], d.logRoots)
-	} else if d.isRootDataFull() {
-		// Could not verify the chain while root info for logs is complete.
-		d.mu.RUnlock()
-		return nil, fmt.Errorf("distributor unable to process cert-chain: %v", err)
-	} else {
-		// Chain might be rooted to the Log which has no root-info yet.
-		parsedChain, err = parseRawChain(rawChain)
-		if err != nil {
-			return nil, fmt.Errorf("distributor unable to parse cert-chain: %v", err)
+	// Helper function establishing responsibility of locking while determining log list and root chain.
+	compatibleLogsAndChain := func() (loglist2.LogList, []*x509.Certificate, error) {
+		d.mu.RLock()
+		defer d.mu.RUnlock()
+		vOpts := ctfe.NewCertValidationOpts(d.rootPool, time.Time{}, false, false, nil, nil, false, nil)
+		rootedChain, err := ctfe.ValidateChain(rawChain, vOpts)
+		if err == nil {
+			return d.usableLl.Compatible(rootedChain[0], rootedChain[len(rootedChain)-1], d.logRoots), rootedChain, nil
 		}
-		compatibleLogs = d.usableLl.Compatible(parsedChain[0], nil, d.logRoots)
+		if d.rootDataFull {
+			// Could not verify the chain while root info for logs is complete.
+			return loglist2.LogList{}, nil, fmt.Errorf("distributor unable to process cert-chain: %v", err)
+		}
+
+		// Chain might be rooted to the Log which has no root-info yet.
+		parsedChain, err := parseRawChain(rawChain)
+		if err != nil {
+			return loglist2.LogList{}, nil, fmt.Errorf("distributor unable to parse cert-chain: %v", err)
+		}
+		return d.usableLl.Compatible(parsedChain[0], nil, d.logRoots), parsedChain, nil
 	}
-	d.mu.RUnlock()
+	compatibleLogs, parsedChain, err := compatibleLogsAndChain()
+	if err != nil {
+		return nil, err
+	}
 
 	// Distinguish between precerts and certificates.
 	isPrecert, err := ctfe.IsPrecertificate(parsedChain[0])

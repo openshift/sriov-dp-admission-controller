@@ -1,4 +1,4 @@
-// Copyright 2018 Google Inc. All Rights Reserved.
+// Copyright 2018 Google LLC. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,4 +15,4 @@
 // Package configpb holds a config protobuf for Migrillian.
 package configpb
 
-//go:generate sh -c "protoc -I=. -I$(go list -f '{{ .Dir }}' github.com/google/trillian) -I$(go list -f '{{ .Dir }}' github.com/google/certificate-transparency-go) --go_out=:$GOPATH/src config.proto"
+//go:generate sh -c "protoc -I=. -I$(go list -f '{{ .Dir }}' github.com/google/trillian) -I$(go list -f '{{ .Dir }}' github.com/google/certificate-transparency-go) --go_out=paths=source_relative:. config.proto"

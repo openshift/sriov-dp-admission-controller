@@ -8,7 +8,6 @@ CT_LIFECYCLE_CFG=
 CT_COMBINED_CFG=
 PROMETHEUS_CFGDIR=
 readonly CT_GO_PATH=$(go list -f '{{.Dir}}' github.com/google/certificate-transparency-go)
-readonly MONO_PATH="$(go list -f '{{.Dir}}' github.com/google/monologue/incident)/.."
 
 # ct_prep_test prepares a set of running processes for a CT test.
 # Parameters:
@@ -36,8 +35,6 @@ ct_prep_test() {
     echo "Wiping and re-creating cttest database"
     "${CT_GO_PATH}/scripts/resetctdb.sh" --force
     # Wipe the incident database
-    echo "Wiping and re-creating incident database"
-    bash "${MONO_PATH}/scripts/resetmondb.sh" --force
   fi
 
   echo "Launching core Trillian log components"
@@ -155,82 +152,6 @@ ct_provision_cfg() {
     sed -i'.bak' "1,/@TREE_ID@/s/@TREE_ID@/${tree_id}/" "${cfg}"
     rm -f "${cfg}.bak"
   done
-}
-
-# ct_gosmin_config generates a gosmin configuration file.
-# Parameters:
-#   - CT http server address
-# Populates:
-#   - GOSMIN_CFG : configuration file for gosmin program.
-ct_gosmin_config() {
-  local server="$1"
-
-  # Build config file with absolute paths
-  GOSMIN_CFG=$(mktemp ${TMPDIR}/gosmin-XXXXXX)
-  sed "s/@SERVER@/${server}/" ${CT_GO_PATH}/trillian/integration/gosmin.cfg > "${GOSMIN_CFG}"
-
-  echo "gosmin configuration at ${GOSMIN_CFG}:"
-  cat "${GOSMIN_CFG}"
-  echo
-}
-
-# ct_start_gosmin starts a gosmin instance.
-# Assumes the following variable is set:
-#   - GOSMIN_CFG : config file for gosmin instance.
-# Populates:
-#   - GOSMIN_PID : pid for gosmin instance.
-ct_start_gosmin() {
-  go build github.com/google/certificate-transparency-go/gossip/minimal/gosmin
-  local metrics_port=$(pick_unused_port)
-  echo "Starting gosmin with metrics on localhost:${metrics_port}"
-  ./gosmin --config="${GOSMIN_CFG}" --metrics_endpoint "localhost:${metrics_port}" --logtostderr &
-  GOSMIN_PID=$!
-}
-
-# ct_stop_gosmin closes the running gosmin process for a CT test.
-# Assumes the following variable is set:
-#   - GOSMIN_PID : pid for gosmin instance.
-ct_stop_gosmin() {
-  if [[ "${GOSMIN_PID}" != "" ]]; then
-    kill_pid ${GOSMIN_PID}
-  fi
-}
-
-# ct_goshawk_config generates a gosmin configuration file.
-# Parameters:
-#   - CT http server address
-# Populates:
-#   - GOSHAWK_CFG : configuration file for gosmin program.
-ct_goshawk_config() {
-  local server="$1"
-
-  # Build config file with absolute paths
-  GOSHAWK_CFG=$(mktemp ${TMPDIR}/goshawk-XXXXXX)
-  sed "s/@SERVER@/${server}/" ${CT_GO_PATH}/trillian/integration/goshawk.cfg > "${GOSHAWK_CFG}"
-
-  echo "goshawk configuration at ${GOSHAWK_CFG}:"
-  cat "${GOSHAWK_CFG}"
-  echo
-}
-
-# ct_start_goshawk starts a goshawk instance.
-# Assumes the following variable is set:
-#   - GOSHAWK_CFG : config file for gosmin instance, shared with goshawk.
-# Populates:
-#   - GOSHAWK_PID : pid for gosmin instance.
-ct_start_goshawk() {
-  go build github.com/google/certificate-transparency-go/gossip/minimal/goshawk
-  ./goshawk --config="${GOSHAWK_CFG}" --logtostderr --flush_state=10s &
-  GOSHAWK_PID=$!
-}
-
-# ct_stop_goshawk closes the running goshawk process for a CT test.
-# Assumes the following variable is set:
-#   - GOSHAWK_PID : pid for gosmin instance.
-ct_stop_goshawk() {
-  if [[ "${GOSHAWK_PID}" != "" ]]; then
-    kill_pid ${GOSHAWK_PID}
-  fi
 }
 
 # ct_stop_test closes the running processes for a CT test.

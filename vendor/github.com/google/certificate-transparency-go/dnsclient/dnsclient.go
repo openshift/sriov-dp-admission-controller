@@ -1,4 +1,4 @@
-// Copyright 2018 Google Inc. All Rights Reserved.
+// Copyright 2018 Google LLC. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -201,8 +201,6 @@ func (c *DNSClient) GetProofByHash(ctx context.Context, hash []byte, treeSize ui
 	}, nil
 }
 
-// TODO(drysdale): add an expectedProofSize parameter and pre-calculate the sizes
-// of proof that are expected.
 func (c *DNSClient) getProof(ctx context.Context, base string) ([][]byte, error) {
 	var proof [][]byte
 	for index := 0; index <= 255; {

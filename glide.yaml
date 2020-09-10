@@ -5,6 +5,8 @@ import:
   subpackages:
   - csr
 - package: github.com/golang/glog
+- package: golang.org/x/crypto
+  version: 123391ffb6de907695e1066dc40c1ff09322aeb6
 - package: github.com/intel/multus-cni
   version: ecc474a26425fd5e6d1b75468a479a24e58add91
   subpackages:

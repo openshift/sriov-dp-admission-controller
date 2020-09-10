@@ -1,4 +1,4 @@
-// Copyright 2018 Google Inc. All Rights Reserved.
+// Copyright 2018 Google LLC. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -212,6 +212,93 @@ func TestVerifySCT(t *testing.T) {
 			}
 
 			err = VerifySCT(pk, chain, &sct, test.embedded)
+			if gotErr := err != nil; gotErr != test.wantErr {
+				t.Errorf("VerifySCT(_,_,_, %t) = %v, want error? %t", test.embedded, err, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestVerifySCTWithVerifier(t *testing.T) {
+	// Parse public key
+	pk, err := ct.PublicKeyFromB64(testdata.LogPublicKeyB64)
+	if err != nil {
+		t.Errorf("error parsing public key: %s", err)
+	}
+
+	// Create signature verifier
+	sv, err := ct.NewSignatureVerifier(pk)
+	if err != nil {
+		t.Errorf("couldn't create signature verifier: %s", err)
+	}
+
+	tests := []struct {
+		desc     string
+		sv       *ct.SignatureVerifier
+		chainPEM string
+		sct      []byte
+		embedded bool
+		wantErr  bool
+	}{
+		{
+			desc:     "nil signature verifier",
+			sv:       nil,
+			chainPEM: testdata.TestCertPEM + testdata.CACertPEM,
+			sct:      testdata.TestCertProof,
+			wantErr:  true,
+		},
+		{
+			desc:     "cert",
+			sv:       sv,
+			chainPEM: testdata.TestCertPEM + testdata.CACertPEM,
+			sct:      testdata.TestCertProof,
+		},
+		{
+			desc:     "precert",
+			sv:       sv,
+			chainPEM: testdata.TestPreCertPEM + testdata.CACertPEM,
+			sct:      testdata.TestPreCertProof,
+		},
+		{
+			desc:     "invalid SCT",
+			sv:       sv,
+			chainPEM: testdata.TestPreCertPEM + testdata.CACertPEM,
+			sct:      testdata.TestCertProof,
+			wantErr:  true,
+		},
+		{
+			desc:     "cert with embedded SCT",
+			sv:       sv,
+			chainPEM: testdata.TestEmbeddedCertPEM + testdata.CACertPEM,
+			sct:      testdata.TestPreCertProof,
+			embedded: true,
+		},
+		{
+			desc:     "cert with invalid embedded SCT",
+			sv:       sv,
+			chainPEM: testdata.TestInvalidEmbeddedCertPEM + testdata.CACertPEM,
+			sct:      testdata.TestInvalidProof,
+			embedded: true,
+			wantErr:  true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.desc, func(t *testing.T) {
+			// Parse chain
+			chain, err := x509util.CertificatesFromPEM([]byte(test.chainPEM))
+			if err != nil {
+				t.Fatalf("error parsing certificate chain: %s", err)
+			}
+
+			// Parse SCT
+			var sct ct.SignedCertificateTimestamp
+			if _, err = tls.Unmarshal(test.sct, &sct); err != nil {
+				t.Fatalf("error tls-unmarshalling sct: %s", err)
+			}
+
+			// Test VerifySCTWithVerifier()
+			err = VerifySCTWithVerifier(test.sv, chain, &sct, test.embedded)
 			if gotErr := err != nil; gotErr != test.wantErr {
 				t.Errorf("VerifySCT(_,_,_, %t) = %v, want error? %t", test.embedded, err, test.wantErr)
 			}
