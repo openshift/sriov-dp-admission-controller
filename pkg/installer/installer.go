@@ -280,4 +280,3 @@ func Install(k8sNamespace, namePrefix string) {
 
 	glog.Infof("all resources created successfully")
 }
-
