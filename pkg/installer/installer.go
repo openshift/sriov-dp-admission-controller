@@ -90,7 +90,7 @@ func getSignedCertificate(request []byte) ([]byte, error) {
 		Message:        "This CSR was approved by net-attach-def admission controller installer.",
 		LastUpdateTime: metav1.Now(),
 	})
-	csr, err = clientset.CertificatesV1beta1().CertificateSigningRequests().UpdateApproval(context.TODO(), csr, metav1.UpdateOptions{})
+	_, err = clientset.CertificatesV1beta1().CertificateSigningRequests().UpdateApproval(context.TODO(), csr, metav1.UpdateOptions{})
 	glog.Infof("certificate approval sent")
 	if err != nil {
 		return nil, errors.Wrap(err, "error approving CSR in Kubernetes API")
@@ -116,10 +116,10 @@ func getSignedCertificate(request []byte) ([]byte, error) {
 }
 
 func writeToFile(certificate, key []byte, certFilename, keyFilename string) error {
-	if err := ioutil.WriteFile("/etc/tls/"+certFilename, certificate, 0644); err != nil {
+	if err := ioutil.WriteFile("/etc/tls/"+certFilename, certificate, 0400); err != nil {
 		return err
 	}
-	if err := ioutil.WriteFile("/etc/tls/"+keyFilename, key, 0644); err != nil {
+	if err := ioutil.WriteFile("/etc/tls/"+keyFilename, key, 0400); err != nil {
 		return err
 	}
 	return nil
@@ -181,7 +181,7 @@ func createService() error {
 			Ports: []corev1.ServicePort{
 				corev1.ServicePort{
 					Port:       443,
-					TargetPort: intstr.FromInt(443),
+					TargetPort: intstr.FromInt(8443),
 				},
 			},
 			Selector: map[string]string{

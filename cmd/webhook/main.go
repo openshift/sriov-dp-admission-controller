@@ -19,19 +19,39 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
+	"time"
 
-	"github.com/golang/glog"
 	"github.com/fsnotify/fsnotify"
+	"github.com/golang/glog"
 	"github.com/intel/network-resources-injector/pkg/webhook"
 )
 
+const defaultClientCa = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+
 func main() {
+	var clientCAPaths webhook.ClientCAFlags
 	/* load configuration */
-	port := flag.Int("port", 443, "The port on which to serve.")
+	port := flag.Int("port", 8443, "The port on which to serve.")
 	address := flag.String("bind-address", "0.0.0.0", "The IP address on which to listen for the --port port.")
 	cert := flag.String("tls-cert-file", "cert.pem", "File containing the default x509 Certificate for HTTPS.")
 	key := flag.String("tls-private-key-file", "key.pem", "File containing the default x509 private key matching --tls-cert-file.")
+	insecure := flag.Bool("insecure", false, "Disable adding client CA to server TLS endpoint --insecure")
+	injectHugepageDownApi := flag.Bool("injectHugepageDownApi", false, "Enable hugepage requests and limits into Downward API.")
+	flag.Var(&clientCAPaths, "client-ca", "File containing client CA. This flag is repeatable if more than one client CA needs to be added to server")
+	resourceNameKeys := flag.String("network-resource-name-keys", "k8s.v1.cni.cncf.io/resourceName", "comma separated resource name keys --network-resource-name-keys.")
 	flag.Parse()
+
+	if *port < 1024 || *port > 65535 {
+		glog.Fatalf("invalid port number. Choose between 1024 and 65535")
+	}
+
+	if *address == "" || *cert == "" || *key == "" || *resourceNameKeys == "" {
+		glog.Fatalf("input argument(s) not defined correctly")
+	}
+
+	if len(clientCAPaths) == 0 {
+		clientCAPaths = append(clientCAPaths, defaultClientCa)
+	}
 
 	glog.Infof("starting mutating admission controller for network resources injection")
 
@@ -40,18 +60,59 @@ func main() {
 		glog.Fatalf("error load certificate: %s", err.Error())
 	}
 
+	clientCaPool, err := webhook.NewClientCertPool(&clientCAPaths, *insecure)
+	if err != nil {
+		glog.Fatalf("error loading client CA pool: '%s'", err.Error())
+	}
+
 	/* init API client */
 	webhook.SetupInClusterClient()
+
+	webhook.SetInjectHugepageDownApi(*injectHugepageDownApi)
+
+	err = webhook.SetResourceNameKeys(*resourceNameKeys)
+	if err != nil {
+		glog.Fatalf("error in setting resource name keys: %s", err.Error())
+	}
 
 	go func() {
 		/* register handlers */
 		var httpServer *http.Server
-		http.HandleFunc("/mutate", webhook.MutateHandler)
+
+		http.HandleFunc("/mutate", func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/mutate" {
+				http.NotFound(w, r)
+				return
+			}
+			if r.Method != http.MethodPost {
+				http.Error(w, "Invalid HTTP verb requested", 405)
+				return
+			}
+			webhook.MutateHandler(w, r)
+		})
 
 		/* start serving */
 		httpServer = &http.Server{
-			Addr: fmt.Sprintf("%s:%d", *address, *port),
+			Addr:              fmt.Sprintf("%s:%d", *address, *port),
+			ReadTimeout:       5 * time.Second,
+			WriteTimeout:      10 * time.Second,
+			MaxHeaderBytes:    1 << 20,
+			ReadHeaderTimeout: 1 * time.Second,
 			TLSConfig: &tls.Config{
+				ClientAuth:               webhook.GetClientAuth(*insecure),
+				MinVersion:               tls.VersionTLS12,
+				CurvePreferences:         []tls.CurveID{tls.CurveP521, tls.CurveP384},
+				ClientCAs:                clientCaPool.GetCertPool(),
+				PreferServerCipherSuites: true,
+				InsecureSkipVerify:       false,
+				CipherSuites: []uint16{
+					// tls 1.2
+					tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+					tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+					tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+					tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+					// tls 1.3 configuration not supported
+				},
 				GetCertificate: keyPair.GetCertificateFunc(),
 			},
 		}

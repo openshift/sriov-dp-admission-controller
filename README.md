@@ -1,5 +1,7 @@
 # Network Resources Injector
 
+[![Weekly minutes](https://img.shields.io/badge/Weekly%20Meeting%20Minutes-Mon%203pm%20GMT-blue.svg?style=plastic)](https://docs.google.com/document/d/1sJQMHbxZdeYJPgAWK1aSt6yzZ4K_8es7woVIrwinVwI)
+
 Network Resources Injector is a Kubernetes Dynamic Admission Controller application that provides functionality of patching Kubernetes pod specifications with requests and limits of custom network resources (managed by device plugins such as [intel/sriov-network-device-plugin](https://github.com/intel/sriov-network-device-plugin)).
 
 ## Getting started
@@ -107,3 +109,23 @@ curl --header "Content-Type: application/json-patch+json" \
 kubectl delete net-attach-def foo-network
 kubectl delete pod webhook-demo
 ```
+
+## Vendoring
+To create the vendor folder invoke the following which will create a vendor folder.
+```bash
+make vendor
+```
+
+## Security
+### Disable adding client CAs to server TLS endpoint
+If you wish to not add any client CAs to the servers TLS endpoint, add ```--insecure``` flag to webhook binary arguments (See [server.yaml](deployments/server.yaml)).
+
+### Client CAs
+By default, we consume the client CA from the Kubernetes service account secrets directory ```/var/run/secrets/kubernetes.io/serviceaccount/```.
+If you wish to consume a client CA from a different location, please specify flag ```--client-ca``` with a valid path. If you wish to add more than one client CA, repeat this flag multiple times. If ```--client-ca``` is defined, the default client CA from the service account secrets directory will not be consumed.
+
+## Other Configuration
+### Expose Hugepages via Downward API
+In Kubernetes 1.20, an alpha feature was added to expose the requested hugepages to the container via the Downward API.
+Being alpha, this feature is disabled in Kubernetes by default.
+If enabled when Kubernetes is deployed via `FEATURE_GATES="DownwardAPIHugePages=true"`, then Network Resource Injector can be used to mutate the pod spec to publish the hugepage data to the container. To enable this functionality in Network Resource Injector, add ```--injectHugepageDownApi``` flag to webhook binary arguments (See [server.yaml](deployments/server.yaml)).
