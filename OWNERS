@@ -6,6 +6,7 @@ reviewers:
   - fepan
   - s1061123
   - vpickard
+  - Billy99
 approvers:
   - zshi-redhat
   - dougbtv
@@ -14,5 +15,6 @@ approvers:
   - fepan
   - s1061123
   - vpickard
+  - Billy99
 component: "Networking"
 subcomponent: "SR-IOV"
