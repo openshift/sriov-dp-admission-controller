@@ -28,7 +28,7 @@ import (
 	"github.com/pkg/errors"
 	multus "gopkg.in/intel/multus-cni.v3/types"
 
-	"github.com/intel/network-resources-injector/pkg/types"
+	"github.com/k8snetworkplumbingwg/network-resources-injector/pkg/types"
 	"k8s.io/api/admission/v1beta1"
 	v1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -53,13 +53,16 @@ type hugepageResourceData struct {
 }
 
 const (
-	networksAnnotationKey = "k8s.v1.cni.cncf.io/networks"
+	networksAnnotationKey       = "k8s.v1.cni.cncf.io/networks"
+	nodeSelectorKey             = "k8s.v1.cni.cncf.io/nodeSelector"
+	defaultNetworkAnnotationKey = "v1.multus-cni.io/default-network"
 )
 
 var (
-	clientset             kubernetes.Interface
-	injectHugepageDownApi bool
-	resourceNameKeys      []string
+	clientset              kubernetes.Interface
+	injectHugepageDownApi  bool
+	resourceNameKeys       []string
+	honorExistingResources bool
 )
 
 func prepareAdmissionReviewResponse(allowed bool, message string, ar *v1beta1.AdmissionReview) error {
@@ -331,6 +334,46 @@ func getNetworkAttachmentDefinition(namespace, name string) (*cniv1.NetworkAttac
 	return &networkAttachmentDefinition, nil
 }
 
+func parseNetworkAttachDefinition(net *multus.NetworkSelectionElement, reqs map[string]int64, nsMap map[string]string) (map[string]int64, map[string]string, error) {
+	/* for each network in annotation ask API server for network-attachment-definition */
+	networkAttachmentDefinition, err := getNetworkAttachmentDefinition(net.Namespace, net.Name)
+	if err != nil {
+		/* if doesn't exist: deny pod */
+		reason := errors.Wrapf(err, "could not find network attachment definition '%s/%s'", net.Namespace, net.Name)
+		glog.Error(reason)
+		return reqs, nsMap, reason
+	}
+	glog.Infof("network attachment definition '%s/%s' found", net.Namespace, net.Name)
+
+	/* network object exists, so check if it contains resourceName annotation */
+	for _, networkResourceNameKey := range resourceNameKeys {
+		if resourceName, exists := networkAttachmentDefinition.ObjectMeta.Annotations[networkResourceNameKey]; exists {
+			/* add resource to map/increment if it was already there */
+			reqs[resourceName]++
+			glog.Infof("resource '%s' needs to be requested for network '%s/%s'", resourceName, net.Namespace, net.Name)
+		} else {
+			glog.Infof("network '%s/%s' doesn't use custom resources, skipping...", net.Namespace, net.Name)
+		}
+	}
+
+	/* parse the net-attach-def annotations for node selector label and add it to the desiredNsMap */
+	if ns, exists := networkAttachmentDefinition.ObjectMeta.Annotations[nodeSelectorKey]; exists {
+		nsNameValue := strings.Split(ns, "=")
+		nsNameValueLen := len(nsNameValue)
+		if nsNameValueLen > 2 {
+			reason := fmt.Errorf("node selector in net-attach-def %s has more than one label", net.Name)
+			glog.Error(reason)
+			return reqs, nsMap, reason
+		} else if nsNameValueLen == 2 {
+			nsMap[strings.TrimSpace(nsNameValue[0])] = strings.TrimSpace(nsNameValue[1])
+		} else {
+			nsMap[strings.TrimSpace(ns)] = ""
+		}
+	}
+
+	return reqs, nsMap, nil
+}
+
 func handleValidationError(w http.ResponseWriter, ar *v1beta1.AdmissionReview, orgErr error) {
 	err := prepareAdmissionReviewResponse(false, orgErr.Error(), ar)
 	if err != nil {
@@ -481,9 +524,107 @@ func createEnvPatch(patch []jsonPatchOperation, container *corev1.Container,
 	return patch
 }
 
+func createNodeSelectorPatch(patch []jsonPatchOperation, existing map[string]string, desired map[string]string) []jsonPatchOperation {
+	targetMap := make(map[string]string)
+	if existing != nil {
+		for k, v := range existing {
+			targetMap[k] = v
+		}
+	}
+	if desired != nil {
+		for k, v := range desired {
+			targetMap[k] = v
+		}
+	}
+	if len(targetMap) == 0 {
+		return patch
+	}
+	patch = append(patch, jsonPatchOperation{
+		Operation: "add",
+		Path:      "/spec/nodeSelector",
+		Value:     targetMap,
+	})
+	return patch
+}
+
+func createResourcePatch(patch []jsonPatchOperation, Containers []corev1.Container, resourceRequests map[string]int64) []jsonPatchOperation {
+	/* check whether resources paths exists in the first container and add as the first patches if missing */
+	if len(Containers[0].Resources.Requests) == 0 {
+		patch = patchEmptyResources(patch, 0, "requests")
+	}
+	if len(Containers[0].Resources.Limits) == 0 {
+		patch = patchEmptyResources(patch, 0, "limits")
+	}
+
+	resourceList := *getResourceList(resourceRequests)
+
+	for resource, quantity := range resourceList {
+		patch = appendResource(patch, resource.String(), quantity, quantity)
+	}
+
+	return patch
+}
+
+func updateResourcePatch(patch []jsonPatchOperation, Containers []corev1.Container, resourceRequests map[string]int64) []jsonPatchOperation {
+	var existingrequestsMap map[corev1.ResourceName]resource.Quantity
+	var existingLimitsMap map[corev1.ResourceName]resource.Quantity
+
+	if len(Containers[0].Resources.Requests) == 0 {
+		patch = patchEmptyResources(patch, 0, "requests")
+	} else {
+		existingrequestsMap = Containers[0].Resources.Requests
+	}
+	if len(Containers[0].Resources.Limits) == 0 {
+		patch = patchEmptyResources(patch, 0, "limits")
+	} else {
+		existingLimitsMap = Containers[0].Resources.Limits
+	}
+
+	resourceList := *getResourceList(resourceRequests)
+
+	for resourceName, quantity := range resourceList {
+		reqQuantity := quantity
+		limitQuantity := quantity
+		if value, ok := existingrequestsMap[resourceName]; ok {
+			reqQuantity.Add(value)
+		}
+		if value, ok := existingLimitsMap[resourceName]; ok {
+			limitQuantity.Add(value)
+		}
+		patch = appendResource(patch, resourceName.String(), reqQuantity, limitQuantity)
+	}
+
+	return patch
+}
+
+func appendResource(patch []jsonPatchOperation, resourceName string, reqQuantity, limitQuantity resource.Quantity) []jsonPatchOperation {
+	patch = append(patch, jsonPatchOperation{
+		Operation: "add",
+		Path:      "/spec/containers/0/resources/requests/" + toSafeJsonPatchKey(resourceName),
+		Value:     reqQuantity,
+	})
+	patch = append(patch, jsonPatchOperation{
+		Operation: "add",
+		Path:      "/spec/containers/0/resources/limits/" + toSafeJsonPatchKey(resourceName),
+		Value:     limitQuantity,
+	})
+
+	return patch
+}
+
+func getResourceList(resourceRequests map[string]int64) *corev1.ResourceList {
+	resourceList := corev1.ResourceList{}
+	for name, number := range resourceRequests {
+		resourceList[corev1.ResourceName(name)] = *resource.NewQuantity(number, resource.DecimalSI)
+	}
+
+	return &resourceList
+}
+
 // MutateHandler handles AdmissionReview requests and sends responses back to the K8s API server
 func MutateHandler(w http.ResponseWriter, req *http.Request) {
 	glog.Infof("Received mutation request")
+	var err error
 
 	/* read AdmissionReview from the HTTP request */
 	ar, httpStatus, err := readAdmissionReview(req, w)
@@ -499,43 +640,55 @@ func MutateHandler(w http.ResponseWriter, req *http.Request) {
 		handleValidationError(w, ar, err)
 		return
 	}
-	if netSelections, exists := pod.ObjectMeta.Annotations[networksAnnotationKey]; exists && netSelections != "" {
+
+	defaultNetSelection, defExist := pod.ObjectMeta.Annotations[defaultNetworkAnnotationKey]
+	additionalNetSelections, addExists := pod.ObjectMeta.Annotations[networksAnnotationKey]
+
+	if defExist || addExists {
 		/* map of resources request needed by a pod and a number of them */
 		resourceRequests := make(map[string]int64)
 
-		/* unmarshal list of network selection objects */
-		networks, err := parsePodNetworkSelections(netSelections, pod.ObjectMeta.Namespace)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
+		/* map of node labels on which pod needs to be scheduled*/
+		desiredNsMap := make(map[string]string)
 
-		for _, n := range networks {
-			/* for each network in annotation ask API server for network-attachment-definition */
-			networkAttachmentDefinition, err := getNetworkAttachmentDefinition(n.Namespace, n.Name)
+		if defaultNetSelection != "" {
+			defNetwork, err := parsePodNetworkSelections(defaultNetSelection, pod.ObjectMeta.Namespace)
 			if err != nil {
-				/* if doesn't exist: deny pod */
-				reason := errors.Wrapf(err, "could not find network attachment definition '%s/%s'", n.Namespace, n.Name)
-				glog.Info(reason)
-				err = prepareAdmissionReviewResponse(false, reason.Error(), ar)
-				if err != nil {
-					glog.Errorf("error preparing AdmissionReview response: %s", err)
-					http.Error(w, err.Error(), http.StatusBadRequest)
-					return
-				}
-				writeResponse(w, ar)
+				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
-			glog.Infof("network attachment definition '%s/%s' found", n.Namespace, n.Name)
-
-			/* network object exists, so check if it contains resourceName annotation */
-			for _, networkResourceNameKey := range resourceNameKeys {
-				if resourceName, exists := networkAttachmentDefinition.ObjectMeta.Annotations[networkResourceNameKey]; exists {
-					/* add resource to map/increment if it was already there */
-					resourceRequests[resourceName]++
-					glog.Infof("resource '%s' needs to be requested for network '%s/%s'", resourceName, n.Namespace, n.Name)
-				} else {
-					glog.Infof("network '%s/%s' doesn't use custom resources, skipping...", n.Namespace, n.Name)
+			if len(defNetwork) == 1 {
+				resourceRequests, desiredNsMap, err = parseNetworkAttachDefinition(defNetwork[0], resourceRequests, desiredNsMap)
+				if err != nil {
+					err = prepareAdmissionReviewResponse(false, err.Error(), ar)
+					if err != nil {
+						glog.Errorf("error preparing AdmissionReview response: %s", err)
+						http.Error(w, err.Error(), http.StatusBadRequest)
+						return
+					}
+					writeResponse(w, ar)
+					return
+				}
+			}
+		}
+		if additionalNetSelections != "" {
+			/* unmarshal list of network selection objects */
+			networks, err := parsePodNetworkSelections(additionalNetSelections, pod.ObjectMeta.Namespace)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			for _, n := range networks {
+				resourceRequests, desiredNsMap, err = parseNetworkAttachDefinition(n, resourceRequests, desiredNsMap)
+				if err != nil {
+					err = prepareAdmissionReviewResponse(false, err.Error(), ar)
+					if err != nil {
+						glog.Errorf("error preparing AdmissionReview response: %s", err)
+						http.Error(w, err.Error(), http.StatusBadRequest)
+						return
+					}
+					writeResponse(w, ar)
+					return
 				}
 			}
 		}
@@ -547,35 +700,16 @@ func MutateHandler(w http.ResponseWriter, req *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+
 		if len(resourceRequests) == 0 {
 			glog.Infof("pod doesn't need any custom network resources")
 		} else {
 			var patch []jsonPatchOperation
-
-			/* check whether resources paths exists in the first container and add as the first patches if missing */
-			if len(pod.Spec.Containers[0].Resources.Requests) == 0 {
-				patch = patchEmptyResources(patch, 0, "requests")
-			}
-			if len(pod.Spec.Containers[0].Resources.Limits) == 0 {
-				patch = patchEmptyResources(patch, 0, "limits")
-			}
-
-			resourceList := corev1.ResourceList{}
-			for name, number := range resourceRequests {
-				resourceList[corev1.ResourceName(name)] = *resource.NewQuantity(number, resource.DecimalSI)
-			}
-
-			for resource, quantity := range resourceList {
-				patch = append(patch, jsonPatchOperation{
-					Operation: "add",
-					Path:      "/spec/containers/0/resources/requests/" + toSafeJsonPatchKey(resource.String()), // NOTE: in future we may want to patch specific container (not always the first one)
-					Value:     quantity,
-				})
-				patch = append(patch, jsonPatchOperation{
-					Operation: "add",
-					Path:      "/spec/containers/0/resources/limits/" + toSafeJsonPatchKey(resource.String()),
-					Value:     quantity,
-				})
+			glog.Infof("honor-resources=%v", honorExistingResources)
+			if honorExistingResources {
+				patch = updateResourcePatch(patch, pod.Spec.Containers, resourceRequests)
+			} else {
+				patch = createResourcePatch(patch, pod.Spec.Containers, resourceRequests)
 			}
 
 			// Determine if hugepages are being requested for a given container,
@@ -636,6 +770,7 @@ func MutateHandler(w http.ResponseWriter, req *http.Request) {
 				}
 			}
 
+			patch = createNodeSelectorPatch(patch, pod.Spec.NodeSelector, desiredNsMap)
 			patch = createVolPatch(patch, hugepageResourceList)
 			glog.Infof("patch after all mutations: %v", patch)
 
@@ -691,4 +826,9 @@ func SetupInClusterClient() {
 // hugepage request and limit for the Downward API.
 func SetInjectHugepageDownApi(hugepageFlag bool) {
 	injectHugepageDownApi = hugepageFlag
+}
+
+// SetHonorExistingResources initialize the honorExistingResources flag
+func SetHonorExistingResources(resourcesHonorFlag bool) {
+	honorExistingResources = resourcesHonorFlag
 }
