@@ -130,6 +130,20 @@ In Kubernetes 1.20, an alpha feature was added to expose the requested hugepages
 Being alpha, this feature is disabled in Kubernetes by default.
 If enabled when Kubernetes is deployed via `FEATURE_GATES="DownwardAPIHugePages=true"`, then Network Resource Injector can be used to mutate the pod spec to publish the hugepage data to the container. To enable this functionality in Network Resource Injector, add ```--injectHugepageDownApi``` flag to webhook binary arguments (See [server.yaml](deployments/server.yaml)).
 
+> NOTE: Please note that the Network Resource Injector does not add hugepage resources to the POD specification. It means that user has to explicitly add it. This feature only exposes it to Downward API. More information about hugepages can be found within Kubernetes [specification](https://kubernetes.io/docs/tasks/manage-hugepages/scheduling-hugepages/). Snippet of how to request hugepage resources in pod spec:
+```
+spec:
+  containers:
+  - image: busybox
+    resources:
+      limits:
+        hugepages-1Gi: 2Gi
+        memory: 2Gi
+      requests:
+        hugepages-1Gi: 2Gi
+        memory: 2Gi
+```
+
 Like the other Downward API provided data, hugepage information for a pod can be located by an application at the path `/etc/podnetinfo/` in the container's file system.
 This directory will contain the request and limit information for 1Gi/2Mb.
 
@@ -245,6 +259,26 @@ spec:
     image: centos:7
     command: [ "/bin/bash", "-c", "--" ]
     args: [ "while true; do sleep 300000; done;" ]
+```
+
+## Test
+### Unit tests
+
+```
+$ make test
+```
+
+### E2E tests using Kubernetes in Docker (KinD)
+Deploy KinD and run tests
+
+```
+$ make e2e
+```
+
+Cleanup KinD deployment
+
+```
+make e2e-clean
 ```
 
 ## Contact Us

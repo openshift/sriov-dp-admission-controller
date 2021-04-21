@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -407,22 +408,30 @@ func patchEmptyResources(patch []jsonPatchOperation, containerIndex uint, key st
 	return patch
 }
 
-func addVolDownwardAPI(patch []jsonPatchOperation, hugepageResourceList []hugepageResourceData) []jsonPatchOperation {
-	labels := corev1.ObjectFieldSelector{
-		FieldPath: "metadata.labels",
+func addVolDownwardAPI(patch []jsonPatchOperation, hugepageResourceList []hugepageResourceData, pod *corev1.Pod) []jsonPatchOperation {
+	dAPIItems := []corev1.DownwardAPIVolumeFile{}
+
+	if pod.Labels != nil && len(pod.Labels) > 0 {
+		labels := corev1.ObjectFieldSelector{
+			FieldPath: "metadata.labels",
+		}
+		dAPILabels := corev1.DownwardAPIVolumeFile{
+			Path:     types.LabelsPath,
+			FieldRef: &labels,
+		}
+		dAPIItems = append(dAPIItems, dAPILabels)
 	}
-	dAPILabels := corev1.DownwardAPIVolumeFile{
-		Path:     types.LabelsPath,
-		FieldRef: &labels,
+
+	if pod.Annotations != nil && len(pod.Annotations) > 0 {
+		annotations := corev1.ObjectFieldSelector{
+			FieldPath: "metadata.annotations",
+		}
+		dAPIAnnotations := corev1.DownwardAPIVolumeFile{
+			Path:     types.AnnotationsPath,
+			FieldRef: &annotations,
+		}
+		dAPIItems = append(dAPIItems, dAPIAnnotations)
 	}
-	annotations := corev1.ObjectFieldSelector{
-		FieldPath: "metadata.annotations",
-	}
-	dAPIAnnotations := corev1.DownwardAPIVolumeFile{
-		Path:     types.AnnotationsPath,
-		FieldRef: &annotations,
-	}
-	dAPIItems := []corev1.DownwardAPIVolumeFile{dAPILabels, dAPIAnnotations}
 
 	for _, hugepageResource := range hugepageResourceList {
 		hugepageSelector := corev1.ResourceFieldSelector{
@@ -457,26 +466,27 @@ func addVolDownwardAPI(patch []jsonPatchOperation, hugepageResourceList []hugepa
 	return patch
 }
 
-func addVolumeMount(patch []jsonPatchOperation) []jsonPatchOperation {
+func addVolumeMount(patch []jsonPatchOperation, containersLen int) []jsonPatchOperation {
 
 	vm := corev1.VolumeMount{
 		Name:      "podnetinfo",
-		ReadOnly:  false,
+		ReadOnly:  true,
 		MountPath: types.DownwardAPIMountPath,
 	}
-
-	patch = append(patch, jsonPatchOperation{
-		Operation: "add",
-		Path:      "/spec/containers/0/volumeMounts/-", // NOTE: in future we may want to patch specific container (not always the first one)
-		Value:     vm,
-	})
+	for containerIndex := 0; containerIndex < containersLen; containerIndex++ {
+		patch = append(patch, jsonPatchOperation{
+			Operation: "add",
+			Path:      "/spec/containers/" + strconv.Itoa(containerIndex) + "/volumeMounts/-",
+			Value:     vm,
+		})
+	}
 
 	return patch
 }
 
-func createVolPatch(patch []jsonPatchOperation, hugepageResourceList []hugepageResourceData) []jsonPatchOperation {
-	patch = addVolumeMount(patch)
-	patch = addVolDownwardAPI(patch, hugepageResourceList)
+func createVolPatch(patch []jsonPatchOperation, hugepageResourceList []hugepageResourceData, pod *corev1.Pod) []jsonPatchOperation {
+	patch = addVolumeMount(patch, len(pod.Spec.Containers))
+	patch = addVolDownwardAPI(patch, hugepageResourceList, pod)
 	return patch
 }
 
@@ -629,6 +639,22 @@ func getResourceList(resourceRequests map[string]int64) *corev1.ResourceList {
 	return &resourceList
 }
 
+func appendPodAnnotation(patch []jsonPatchOperation, pod corev1.Pod, userDefinedPatch jsonPatchOperation) []jsonPatchOperation {
+	annotMap := make(map[string]string)
+	for k, v := range pod.ObjectMeta.Annotations {
+		annotMap[k] = v
+	}
+	for k, v := range userDefinedPatch.Value.(map[string]interface{}) {
+		annotMap[k] = v.(string)
+	}
+	patch = append(patch, jsonPatchOperation{
+		Operation: "add",
+		Path:      "/metadata/annotations",
+		Value:     annotMap,
+	})
+	return patch
+}
+
 func createCustomizedPatch(pod corev1.Pod) ([]jsonPatchOperation, error) {
 	var userDefinedPatch []jsonPatchOperation
 
@@ -645,6 +671,15 @@ func createCustomizedPatch(pod corev1.Pod) ([]jsonPatchOperation, error) {
 		}
 	}
 	return userDefinedPatch, nil
+}
+
+func appendCustomizedPatch(patch []jsonPatchOperation, pod corev1.Pod, userDefinedPatch []jsonPatchOperation) []jsonPatchOperation {
+	for _, p := range userDefinedPatch {
+		if p.Path == "/metadata/annotations" {
+			patch = appendPodAnnotation(patch, pod, p)
+		}
+	}
+	return patch
 }
 
 func getNetworkSelections(annotationKey string, pod corev1.Pod, userDefinedPatch []jsonPatchOperation) (string, bool) {
@@ -758,11 +793,10 @@ func MutateHandler(w http.ResponseWriter, req *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-
+		var patch []jsonPatchOperation
 		if len(resourceRequests) == 0 {
 			glog.Infof("pod doesn't need any custom network resources")
 		} else {
-			var patch []jsonPatchOperation
 			glog.Infof("honor-resources=%v", honorExistingResources)
 			if honorExistingResources {
 				patch = updateResourcePatch(patch, pod.Spec.Containers, resourceRequests)
@@ -827,19 +861,18 @@ func MutateHandler(w http.ResponseWriter, req *http.Request) {
 					}
 				}
 			}
-
-			patch = createNodeSelectorPatch(patch, pod.Spec.NodeSelector, desiredNsMap)
-			patch = createVolPatch(patch, hugepageResourceList)
-			patch = append(patch, userDefinedPatch...)
-			glog.Infof("patch after all mutations: %v", patch)
-
-			patchBytes, _ := json.Marshal(patch)
-			ar.Response.Patch = patchBytes
-			ar.Response.PatchType = func() *v1beta1.PatchType {
-				pt := v1beta1.PatchTypeJSONPatch
-				return &pt
-			}()
+			patch = createVolPatch(patch, hugepageResourceList, &pod)
+			patch = appendCustomizedPatch(patch, pod, userDefinedPatch)
 		}
+		patch = createNodeSelectorPatch(patch, pod.Spec.NodeSelector, desiredNsMap)
+		glog.Infof("patch after all mutations: %v", patch)
+
+		patchBytes, _ := json.Marshal(patch)
+		ar.Response.Patch = patchBytes
+		ar.Response.PatchType = func() *v1beta1.PatchType {
+			pt := v1beta1.PatchTypeJSONPatch
+			return &pt
+		}()
 	} else {
 		/* network annotation not provided or empty */
 		glog.Infof("pod spec doesn't have network annotations. Skipping...")

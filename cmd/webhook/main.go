@@ -157,11 +157,11 @@ func main() {
 			if !ok {
 				continue
 			}
-			glog.Infof("watcher event: %v", event)
+			glog.V(2).Infof("watcher event: %v", event)
 			mask := fsnotify.Create | fsnotify.Rename | fsnotify.Remove |
 				fsnotify.Write | fsnotify.Chmod
 			if (event.Op & mask) != 0 {
-				glog.Infof("modified file: %v", event.Name)
+				glog.V(2).Infof("modified file: %v", event.Name)
 				if event.Name == *cert {
 					certUpdated = true
 				}
@@ -187,8 +187,8 @@ func main() {
 			if err != nil {
 				if !errors.IsNotFound(err) {
 					glog.Warningf("Failed to get configmap for user-defined injections: %v", err)
+					continue
 				}
-				continue
 			}
 			webhook.SetCustomizedInjections(cm)
 		}
