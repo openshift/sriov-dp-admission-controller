@@ -15,36 +15,44 @@
 package webhook
 
 import (
-	. "github.com/onsi/ginkgo"
-	. "github.com/onsi/ginkgo/extensions/table"
-	. "github.com/onsi/gomega"
-
 	"bytes"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 
-	"k8s.io/api/admission/v1beta1"
+	"gopkg.in/intel/multus-cni.v3/pkg/types"
+	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"gopkg.in/intel/multus-cni.v3/types"
+	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/ginkgo/extensions/table"
+	. "github.com/onsi/gomega"
+
+	"github.com/k8snetworkplumbingwg/network-resources-injector/pkg/controlswitches"
 )
 
-var _ = Describe("Webhook", func() {
+func createBool(value bool) *bool {
+	return &value
+}
 
+func createString(value string) *string {
+	return &value
+}
+
+var _ = Describe("Webhook", func() {
 	Describe("Preparing Admission Review Response", func() {
 		Context("Admission Review Request is nil", func() {
 			It("should return error", func() {
-				ar := &v1beta1.AdmissionReview{}
+				ar := &admissionv1.AdmissionReview{}
 				ar.Request = nil
 				Expect(prepareAdmissionReviewResponse(false, "", ar)).To(HaveOccurred())
 			})
 		})
 		Context("Message is not empty", func() {
 			It("should set message in the response", func() {
-				ar := &v1beta1.AdmissionReview{}
-				ar.Request = &v1beta1.AdmissionRequest{
+				ar := &admissionv1.AdmissionReview{}
+				ar.Request = &admissionv1.AdmissionRequest{
 					UID: "fake-uid",
 				}
 				err := prepareAdmissionReviewResponse(false, "some message", ar)
@@ -67,8 +75,8 @@ var _ = Describe("Webhook", func() {
 	Describe("Deserializing Network Attachment Definition", func() {
 		Context("It's not an Network Attachment Definition", func() {
 			It("should return an error", func() {
-				ar := &v1beta1.AdmissionReview{}
-				ar.Request = &v1beta1.AdmissionRequest{}
+				ar := &admissionv1.AdmissionReview{}
+				ar.Request = &admissionv1.AdmissionRequest{}
 				_, err := deserializeNetworkAttachmentDefinition(ar)
 				Expect(err).To(HaveOccurred())
 			})
@@ -78,8 +86,8 @@ var _ = Describe("Webhook", func() {
 	Describe("Deserializing Pod", func() {
 		Context("It's not a Pod", func() {
 			It("should return an error", func() {
-				ar := &v1beta1.AdmissionReview{}
-				ar.Request = &v1beta1.AdmissionRequest{}
+				ar := &admissionv1.AdmissionReview{}
+				ar.Request = &admissionv1.AdmissionRequest{}
 				_, err := deserializePod(ar)
 				Expect(err).To(HaveOccurred())
 			})
@@ -90,8 +98,8 @@ var _ = Describe("Webhook", func() {
 		Context("with an AdmissionReview", func() {
 			It("should be marshalled and written to a HTTP Response Writer", func() {
 				w := httptest.NewRecorder()
-				ar := &v1beta1.AdmissionReview{}
-				ar.Response = &v1beta1.AdmissionResponse{
+				ar := &admissionv1.AdmissionReview{}
+				ar.Response = &admissionv1.AdmissionResponse{
 					UID:     "fake-uid",
 					Allowed: true,
 					Result: &metav1.Status{
@@ -106,6 +114,12 @@ var _ = Describe("Webhook", func() {
 	})
 
 	Describe("Handling requests", func() {
+		BeforeEach(func() {
+			structure := controlswitches.SetupControlSwitchesUnitTests(createBool(false), createBool(false), createString(""))
+			structure.InitControlSwitches()
+			SetControlSwitches(structure)
+		})
+
 		Context("Request body is empty", func() {
 			It("mutate - should return an error", func() {
 				req := httptest.NewRequest("POST", fmt.Sprintf("https://fakewebhook/mutate"), nil)
@@ -139,7 +153,7 @@ var _ = Describe("Webhook", func() {
 			"match pod label",
 			corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
-					Name: "test",
+					Name:   "test",
 					Labels: map[string]string{"nri-inject-annotation": "true"},
 				},
 				Spec: corev1.PodSpec{},
@@ -147,15 +161,15 @@ var _ = Describe("Webhook", func() {
 			map[string]jsonPatchOperation{
 				"nri-inject-annotation": jsonPatchOperation{
 					Operation: "add",
-					Path: "/metadata/annotations",
-					Value: map[string]interface{}{"k8s.v1.cni.cncf.io/networks": "sriov-net"},
+					Path:      "/metadata/annotations",
+					Value:     map[string]interface{}{"k8s.v1.cni.cncf.io/networks": "sriov-net"},
 				},
 			},
 			[]jsonPatchOperation{
 				{
 					Operation: "add",
-					Path: "/metadata/annotations",
-					Value: map[string]interface{}{"k8s.v1.cni.cncf.io/networks": "sriov-net"},
+					Path:      "/metadata/annotations",
+					Value:     map[string]interface{}{"k8s.v1.cni.cncf.io/networks": "sriov-net"},
 				},
 			},
 		),
@@ -163,7 +177,7 @@ var _ = Describe("Webhook", func() {
 			"doesn't match pod label value",
 			corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
-					Name: "test",
+					Name:   "test",
 					Labels: map[string]string{"nri-inject-annotation": "false"},
 				},
 				Spec: corev1.PodSpec{},
@@ -171,8 +185,8 @@ var _ = Describe("Webhook", func() {
 			map[string]jsonPatchOperation{
 				"nri-inject-annotation": jsonPatchOperation{
 					Operation: "add",
-					Path: "/metadata/annotations",
-					Value: map[string]interface{}{"k8s.v1.cni.cncf.io/networks": "sriov-net"},
+					Path:      "/metadata/annotations",
+					Value:     map[string]interface{}{"k8s.v1.cni.cncf.io/networks": "sriov-net"},
 				},
 			},
 			nil,
@@ -181,7 +195,7 @@ var _ = Describe("Webhook", func() {
 			"doesn't match pod label key",
 			corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
-					Name: "test",
+					Name:   "test",
 					Labels: map[string]string{"nri-inject-labels": "true"},
 				},
 				Spec: corev1.PodSpec{},
@@ -189,8 +203,8 @@ var _ = Describe("Webhook", func() {
 			map[string]jsonPatchOperation{
 				"nri-inject-annotation": jsonPatchOperation{
 					Operation: "add",
-					Path: "/metadata/annotations",
-					Value: map[string]interface{}{"k8s.v1.cni.cncf.io/networks": "sriov-net"},
+					Path:      "/metadata/annotations",
+					Value:     map[string]interface{}{"k8s.v1.cni.cncf.io/networks": "sriov-net"},
 				},
 			},
 			nil,
@@ -209,7 +223,7 @@ var _ = Describe("Webhook", func() {
 			"k8s.v1.cni.cncf.io/networks",
 			corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
-					Name: "test",
+					Name:        "test",
 					Annotations: map[string]string{"k8s.v1.cni.cncf.io/networks": "sriov-net"},
 				},
 				Spec: corev1.PodSpec{},
@@ -217,8 +231,8 @@ var _ = Describe("Webhook", func() {
 			[]jsonPatchOperation{
 				{
 					Operation: "add",
-					Path: "/metadata/annotations",
-					Value: map[string]interface{}{"k8s.v1.cni.cncf.io/networks": "sriov-net-user-defined"},
+					Path:      "/metadata/annotations",
+					Value:     map[string]interface{}{"k8s.v1.cni.cncf.io/networks": "sriov-net-user-defined"},
 				},
 			},
 			"sriov-net",
@@ -229,7 +243,7 @@ var _ = Describe("Webhook", func() {
 			"k8s.v1.cni.cncf.io/networks",
 			corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
-					Name: "test",
+					Name:        "test",
 					Annotations: map[string]string{"v1.multus-cni.io/default-network": "sriov-net"},
 				},
 				Spec: corev1.PodSpec{},
@@ -237,8 +251,8 @@ var _ = Describe("Webhook", func() {
 			[]jsonPatchOperation{
 				{
 					Operation: "add",
-					Path: "/metadata/annotations",
-					Value: map[string]interface{}{"k8s.v1.cni.cncf.io/networks": "sriov-net-user-defined"},
+					Path:      "/metadata/annotations",
+					Value:     map[string]interface{}{"k8s.v1.cni.cncf.io/networks": "sriov-net-user-defined"},
 				},
 			},
 			"sriov-net-user-defined",
@@ -249,7 +263,7 @@ var _ = Describe("Webhook", func() {
 			"k8s.v1.cni.cncf.io/networks",
 			corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
-					Name: "test",
+					Name:        "test",
 					Annotations: map[string]string{"v1.multus-cni.io/default-network": "sriov-net"},
 				},
 				Spec: corev1.PodSpec{},
@@ -257,8 +271,8 @@ var _ = Describe("Webhook", func() {
 			[]jsonPatchOperation{
 				{
 					Operation: "add",
-					Path: "/metadata/annotations",
-					Value: map[string]interface{}{"v1.multus-cni.io/default-network": "sriov-net-user-defined"},
+					Path:      "/metadata/annotations",
+					Value:     map[string]interface{}{"v1.multus-cni.io/default-network": "sriov-net-user-defined"},
 				},
 			},
 			"",
@@ -290,8 +304,8 @@ var _ = Describe("Webhook", func() {
 			map[string]jsonPatchOperation{
 				"nri-inject-annotation": jsonPatchOperation{
 					Operation: "add",
-					Path: "/metadata/annotations",
-					Value: map[string]interface{}{"k8s.v1.cni.cncf.io/networks": "sriov-net"},
+					Path:      "/metadata/annotations",
+					Value:     map[string]interface{}{"k8s.v1.cni.cncf.io/networks": "sriov-net"},
 				},
 			},
 		),
@@ -305,8 +319,8 @@ var _ = Describe("Webhook", func() {
 			map[string]jsonPatchOperation{
 				"nri-inject-annotation": jsonPatchOperation{
 					Operation: "add",
-					Path: "/metadata/annotations",
-					Value: map[string]interface{}{"v1.multus-cni.io/default-network": "sriov-net"},
+					Path:      "/metadata/annotations",
+					Value:     map[string]interface{}{"v1.multus-cni.io/default-network": "sriov-net"},
 				},
 			},
 		),
@@ -328,8 +342,8 @@ var _ = Describe("Webhook", func() {
 			map[string]jsonPatchOperation{
 				"nri-inject-annotation": jsonPatchOperation{
 					Operation: "add",
-					Path: "/metadata/annotations",
-					Value: map[string]interface{}{"v1.multus-cni.io/default-network": "sriov-net"},
+					Path:      "/metadata/annotations",
+					Value:     map[string]interface{}{"v1.multus-cni.io/default-network": "sriov-net"},
 				},
 			},
 			map[string]jsonPatchOperation{},
@@ -343,15 +357,15 @@ var _ = Describe("Webhook", func() {
 			map[string]jsonPatchOperation{
 				"nri-inject-annotation": jsonPatchOperation{
 					Operation: "add",
-					Path: "/metadata/annotations",
-					Value: map[string]interface{}{"v1.multus-cni.io/default-network": "sriov-net-old"},
+					Path:      "/metadata/annotations",
+					Value:     map[string]interface{}{"v1.multus-cni.io/default-network": "sriov-net-old"},
 				},
 			},
 			map[string]jsonPatchOperation{
 				"nri-inject-annotation": jsonPatchOperation{
 					Operation: "add",
-					Path: "/metadata/annotations",
-					Value: map[string]interface{}{"v1.multus-cni.io/default-network": "sriov-net-new"},
+					Path:      "/metadata/annotations",
+					Value:     map[string]interface{}{"v1.multus-cni.io/default-network": "sriov-net-new"},
 				},
 			},
 		),

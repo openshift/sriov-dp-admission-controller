@@ -29,10 +29,12 @@ import (
 	"github.com/golang/glog"
 	cniv1 "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/apis/k8s.cni.cncf.io/v1"
 	"github.com/pkg/errors"
-	multus "gopkg.in/intel/multus-cni.v3/types"
+	multus "gopkg.in/intel/multus-cni.v3/pkg/types"
 
+	"github.com/k8snetworkplumbingwg/network-resources-injector/pkg/controlswitches"
+	netcache "github.com/k8snetworkplumbingwg/network-resources-injector/pkg/tools"
 	"github.com/k8snetworkplumbingwg/network-resources-injector/pkg/types"
-	"k8s.io/api/admission/v1beta1"
+	admissionv1 "k8s.io/api/admission/v1"
 	v1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -67,16 +69,19 @@ const (
 )
 
 var (
-	clientset              kubernetes.Interface
-	injectHugepageDownApi  bool
-	resourceNameKeys       []string
-	honorExistingResources bool
-	userDefinedInjects     = &userDefinedInjections{Patchs: make(map[string]jsonPatchOperation)}
+	clientset          kubernetes.Interface
+	nadCache           netcache.NetAttachDefCacheService
+	userDefinedInjects = &userDefinedInjections{Patchs: make(map[string]jsonPatchOperation)}
+	controlSwitches    *controlswitches.ControlSwitches
 )
 
-func prepareAdmissionReviewResponse(allowed bool, message string, ar *v1beta1.AdmissionReview) error {
+func SetControlSwitches(activeConfiguration *controlswitches.ControlSwitches) {
+	controlSwitches = activeConfiguration
+}
+
+func prepareAdmissionReviewResponse(allowed bool, message string, ar *admissionv1.AdmissionReview) error {
 	if ar.Request != nil {
-		ar.Response = &v1beta1.AdmissionResponse{
+		ar.Response = &admissionv1.AdmissionResponse{
 			UID:     ar.Request.UID,
 			Allowed: allowed,
 		}
@@ -90,7 +95,7 @@ func prepareAdmissionReviewResponse(allowed bool, message string, ar *v1beta1.Ad
 	return errors.New("received empty AdmissionReview request")
 }
 
-func readAdmissionReview(req *http.Request, w http.ResponseWriter) (*v1beta1.AdmissionReview, int, error) {
+func readAdmissionReview(req *http.Request, w http.ResponseWriter) (*admissionv1.AdmissionReview, int, error) {
 	var body []byte
 
 	if req.Body != nil {
@@ -125,8 +130,8 @@ func readAdmissionReview(req *http.Request, w http.ResponseWriter) (*v1beta1.Adm
 	return ar, http.StatusOK, nil
 }
 
-func deserializeAdmissionReview(body []byte) (*v1beta1.AdmissionReview, error) {
-	ar := &v1beta1.AdmissionReview{}
+func deserializeAdmissionReview(body []byte) (*admissionv1.AdmissionReview, error) {
+	ar := &admissionv1.AdmissionReview{}
 	runtimeScheme := runtime.NewScheme()
 	codecs := serializer.NewCodecFactory(runtimeScheme)
 	deserializer := codecs.UniversalDeserializer()
@@ -140,14 +145,14 @@ func deserializeAdmissionReview(body []byte) (*v1beta1.AdmissionReview, error) {
 	return ar, err
 }
 
-func deserializeNetworkAttachmentDefinition(ar *v1beta1.AdmissionReview) (cniv1.NetworkAttachmentDefinition, error) {
+func deserializeNetworkAttachmentDefinition(ar *admissionv1.AdmissionReview) (cniv1.NetworkAttachmentDefinition, error) {
 	/* unmarshal NetworkAttachmentDefinition from AdmissionReview request */
 	netAttachDef := cniv1.NetworkAttachmentDefinition{}
 	err := json.Unmarshal(ar.Request.Object.Raw, &netAttachDef)
 	return netAttachDef, err
 }
 
-func deserializePod(ar *v1beta1.AdmissionReview) (corev1.Pod, error) {
+func deserializePod(ar *admissionv1.AdmissionReview) (corev1.Pod, error) {
 	/* unmarshal Pod from AdmissionReview request */
 	pod := corev1.Pod{}
 	err := json.Unmarshal(ar.Request.Object.Raw, &pod)
@@ -367,18 +372,23 @@ func getNetworkAttachmentDefinition(namespace, name string) (*cniv1.NetworkAttac
 
 func parseNetworkAttachDefinition(net *multus.NetworkSelectionElement, reqs map[string]int64, nsMap map[string]string) (map[string]int64, map[string]string, error) {
 	/* for each network in annotation ask API server for network-attachment-definition */
-	networkAttachmentDefinition, err := getNetworkAttachmentDefinition(net.Namespace, net.Name)
-	if err != nil {
-		/* if doesn't exist: deny pod */
-		reason := errors.Wrapf(err, "could not find network attachment definition '%s/%s'", net.Namespace, net.Name)
-		glog.Error(reason)
-		return reqs, nsMap, reason
+	annotationsMap := nadCache.Get(net.Namespace, net.Name)
+	if annotationsMap == nil {
+		glog.Infof("cache entry not found, retrieving network attachment definition '%s/%s' from api server", net.Namespace, net.Name)
+		networkAttachmentDefinition, err := getNetworkAttachmentDefinition(net.Namespace, net.Name)
+		if err != nil {
+			/* if doesn't exist: deny pod */
+			reason := errors.Wrapf(err, "could not find network attachment definition '%s/%s'", net.Namespace, net.Name)
+			glog.Error(reason)
+			return reqs, nsMap, reason
+		}
+		annotationsMap = networkAttachmentDefinition.GetAnnotations()
 	}
 	glog.Infof("network attachment definition '%s/%s' found", net.Namespace, net.Name)
 
 	/* network object exists, so check if it contains resourceName annotation */
-	for _, networkResourceNameKey := range resourceNameKeys {
-		if resourceName, exists := networkAttachmentDefinition.ObjectMeta.Annotations[networkResourceNameKey]; exists {
+	for _, networkResourceNameKey := range controlSwitches.GetResourceNameKeys() {
+		if resourceName, exists := annotationsMap[networkResourceNameKey]; exists {
 			/* add resource to map/increment if it was already there */
 			reqs[resourceName]++
 			glog.Infof("resource '%s' needs to be requested for network '%s/%s'", resourceName, net.Namespace, net.Name)
@@ -388,7 +398,7 @@ func parseNetworkAttachDefinition(net *multus.NetworkSelectionElement, reqs map[
 	}
 
 	/* parse the net-attach-def annotations for node selector label and add it to the desiredNsMap */
-	if ns, exists := networkAttachmentDefinition.ObjectMeta.Annotations[nodeSelectorKey]; exists {
+	if ns, exists := annotationsMap[nodeSelectorKey]; exists {
 		nsNameValue := strings.Split(ns, "=")
 		nsNameValueLen := len(nsNameValue)
 		if nsNameValueLen > 2 {
@@ -405,7 +415,7 @@ func parseNetworkAttachDefinition(net *multus.NetworkSelectionElement, reqs map[
 	return reqs, nsMap, nil
 }
 
-func handleValidationError(w http.ResponseWriter, ar *v1beta1.AdmissionReview, orgErr error) {
+func handleValidationError(w http.ResponseWriter, ar *admissionv1.AdmissionReview, orgErr error) {
 	err := prepareAdmissionReviewResponse(false, orgErr.Error(), ar)
 	if err != nil {
 		err := errors.Wrap(err, "error preparing AdmissionResponse")
@@ -415,7 +425,7 @@ func handleValidationError(w http.ResponseWriter, ar *v1beta1.AdmissionReview, o
 	writeResponse(w, ar)
 }
 
-func writeResponse(w http.ResponseWriter, ar *v1beta1.AdmissionReview) {
+func writeResponse(w http.ResponseWriter, ar *admissionv1.AdmissionReview) {
 	glog.Infof("sending response to the Kubernetes API server")
 	resp, _ := json.Marshal(ar)
 	w.Write(resp)
@@ -672,22 +682,6 @@ func getResourceList(resourceRequests map[string]int64) *corev1.ResourceList {
 	return &resourceList
 }
 
-func appendPodAnnotation(patch []jsonPatchOperation, pod corev1.Pod, userDefinedPatch jsonPatchOperation) []jsonPatchOperation {
-	annotMap := make(map[string]string)
-	for k, v := range pod.ObjectMeta.Annotations {
-		annotMap[k] = v
-	}
-	for k, v := range userDefinedPatch.Value.(map[string]interface{}) {
-		annotMap[k] = v.(string)
-	}
-	patch = append(patch, jsonPatchOperation{
-		Operation: "add",
-		Path:      "/metadata/annotations",
-		Value:     annotMap,
-	})
-	return patch
-}
-
 func createCustomizedPatch(pod corev1.Pod) ([]jsonPatchOperation, error) {
 	var userDefinedPatch []jsonPatchOperation
 
@@ -703,16 +697,47 @@ func createCustomizedPatch(pod corev1.Pod) ([]jsonPatchOperation, error) {
 			userDefinedPatch = append(userDefinedPatch, v)
 		}
 	}
+
 	return userDefinedPatch, nil
 }
 
-func appendCustomizedPatch(patch []jsonPatchOperation, pod corev1.Pod, userDefinedPatch []jsonPatchOperation) []jsonPatchOperation {
+func appendAddAnnotPatch(patch []jsonPatchOperation, pod corev1.Pod, userDefinedPatch []jsonPatchOperation) []jsonPatchOperation {
+	annotations := make(map[string]string)
+	patchOp := jsonPatchOperation{
+		Operation: "add",
+		Path:      "/metadata/annotations",
+		Value:     annotations,
+	}
+
 	for _, p := range userDefinedPatch {
-		if p.Path == "/metadata/annotations" {
-			patch = appendPodAnnotation(patch, pod, p)
+		if p.Path == "/metadata/annotations" && p.Operation == "add" {
+			//loop over user defined injected annotations key-value pairs
+			for k, v := range p.Value.(map[string]interface{}) {
+				if _, exists := annotations[k]; exists {
+					glog.Warningf("ignoring duplicate user defined injected annotation: %s: %s", k, v.(string))
+				} else {
+					annotations[k] = v.(string)
+				}
+			}
 		}
 	}
+
+	if len(annotations) > 0 {
+		// attempt to add existing pod annotation but do not override
+		for k, v := range pod.ObjectMeta.Annotations {
+			if _, exists := annotations[k]; !exists {
+				annotations[k] = v
+			}
+		}
+		patch = append(patch, patchOp)
+	}
+
 	return patch
+}
+
+func appendCustomizedPatch(patch []jsonPatchOperation, pod corev1.Pod, userDefinedPatch []jsonPatchOperation) []jsonPatchOperation {
+	//Add operation for annotations is currently only supported
+	return appendAddAnnotPatch(patch, pod, userDefinedPatch)
 }
 
 func getNetworkSelections(annotationKey string, pod corev1.Pod, userDefinedPatch []jsonPatchOperation) (string, bool) {
@@ -744,7 +769,7 @@ func getNetworkSelections(annotationKey string, pod corev1.Pod, userDefinedPatch
 
 // MutateHandler handles AdmissionReview requests and sends responses back to the K8s API server
 func MutateHandler(w http.ResponseWriter, req *http.Request) {
-	glog.Infof("Received mutation request")
+	glog.Infof("Received mutation request. Features status: %s", controlSwitches.GetAllFeaturesState())
 	var err error
 
 	/* read AdmissionReview from the HTTP request */
@@ -761,11 +786,12 @@ func MutateHandler(w http.ResponseWriter, req *http.Request) {
 		handleValidationError(w, ar, err)
 		return
 	}
-	glog.Infof("AdmissionReview request received for pod: %s in namespace: %s", pod.ObjectMeta.Name, pod.ObjectMeta.Namespace)
+	glog.Infof("AdmissionReview request received for pod %s/%s", pod.ObjectMeta.Namespace, pod.ObjectMeta.Name)
 
 	userDefinedPatch, err := createCustomizedPatch(pod)
 	if err != nil {
-		glog.Warningf("Error, failed to create user-defined injection patch, %v", err)
+		glog.Warningf("failed to create user-defined injection patch for pod %s/%s, err: %v",
+			pod.ObjectMeta.Namespace, pod.ObjectMeta.Name, err)
 	}
 
 	defaultNetSelection, defExist := getNetworkSelections(defaultNetworkAnnotationKey, pod, userDefinedPatch)
@@ -789,7 +815,8 @@ func MutateHandler(w http.ResponseWriter, req *http.Request) {
 				if err != nil {
 					err = prepareAdmissionReviewResponse(false, err.Error(), ar)
 					if err != nil {
-						glog.Errorf("error preparing AdmissionReview response: %s", err)
+						glog.Errorf("error preparing AdmissionReview response for pod %s/%s, error: %v",
+							pod.ObjectMeta.Namespace, pod.ObjectMeta.Name, err)
 						http.Error(w, err.Error(), http.StatusBadRequest)
 						return
 					}
@@ -810,7 +837,8 @@ func MutateHandler(w http.ResponseWriter, req *http.Request) {
 				if err != nil {
 					err = prepareAdmissionReviewResponse(false, err.Error(), ar)
 					if err != nil {
-						glog.Errorf("error preparing AdmissionReview response: %s", err)
+						glog.Errorf("error preparing AdmissionReview response for pod %s/%s, error: %v",
+							pod.ObjectMeta.Namespace, pod.ObjectMeta.Name, err)
 						http.Error(w, err.Error(), http.StatusBadRequest)
 						return
 					}
@@ -818,21 +846,23 @@ func MutateHandler(w http.ResponseWriter, req *http.Request) {
 					return
 				}
 			}
+			glog.Infof("pod %s/%s has resource requests: %v and node selectors: %v", pod.ObjectMeta.Namespace,
+				pod.ObjectMeta.Name, resourceRequests, desiredNsMap)
 		}
 
 		/* patch with custom resources requests and limits */
 		err = prepareAdmissionReviewResponse(true, "allowed", ar)
 		if err != nil {
-			glog.Errorf("error preparing AdmissionReview response: %s", err)
+			glog.Errorf("error preparing AdmissionReview response for pod %s/%s, error: %v",
+				pod.ObjectMeta.Namespace, pod.ObjectMeta.Name, err)
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		var patch []jsonPatchOperation
 		if len(resourceRequests) == 0 {
-			glog.Infof("pod doesn't need any custom network resources")
+			glog.Infof("pod %s/%s doesn't need any custom network resources", pod.ObjectMeta.Namespace, pod.ObjectMeta.Name)
 		} else {
-			glog.Infof("honor-resources=%v", honorExistingResources)
-			if honorExistingResources {
+			if controlSwitches.IsHonorExistingResourcesEnabled() {
 				patch = updateResourcePatch(patch, pod.Spec.Containers, resourceRequests)
 			} else {
 				patch = createResourcePatch(patch, pod.Spec.Containers, resourceRequests)
@@ -841,8 +871,7 @@ func MutateHandler(w http.ResponseWriter, req *http.Request) {
 			// Determine if hugepages are being requested for a given container,
 			// and if so, expose the value to the container via Downward API.
 			var hugepageResourceList []hugepageResourceData
-			glog.Infof("injectHugepageDownApi=%v", injectHugepageDownApi)
-			if injectHugepageDownApi {
+			if controlSwitches.IsHugePagedownAPIEnabled() {
 				for containerIndex, container := range pod.Spec.Containers {
 					found := false
 					if len(container.Resources.Requests) != 0 {
@@ -899,40 +928,32 @@ func MutateHandler(w http.ResponseWriter, req *http.Request) {
 			patch = appendCustomizedPatch(patch, pod, userDefinedPatch)
 		}
 		patch = createNodeSelectorPatch(patch, pod.Spec.NodeSelector, desiredNsMap)
-		glog.Infof("patch after all mutations: %v", patch)
+		glog.Infof("patch after all mutations: %v for pod %s/%s", patch, pod.ObjectMeta.Namespace, pod.ObjectMeta.Name)
 
 		patchBytes, _ := json.Marshal(patch)
 		ar.Response.Patch = patchBytes
-		ar.Response.PatchType = func() *v1beta1.PatchType {
-			pt := v1beta1.PatchTypeJSONPatch
+		ar.Response.PatchType = func() *admissionv1.PatchType {
+			pt := admissionv1.PatchTypeJSONPatch
 			return &pt
 		}()
 	} else {
 		/* network annotation not provided or empty */
-		glog.Infof("pod spec doesn't have network annotations. Skipping...")
+		glog.Infof("pod %s/%s spec doesn't have network annotations. Skipping...", pod.ObjectMeta.Namespace, pod.ObjectMeta.Name)
 		err = prepareAdmissionReviewResponse(true, "Pod spec doesn't have network annotations. Skipping...", ar)
 		if err != nil {
-			glog.Infof("error preparing AdmissionReview response: %s", err)
+			glog.Errorf("error preparing AdmissionReview response for pod %s/%s, error: %v",
+				pod.ObjectMeta.Namespace, pod.ObjectMeta.Name, err)
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 	}
 
 	writeResponse(w, ar)
-	return
-
 }
 
-// SetResourceNameKeys extracts resources from a string and add them to resourceNameKeys array
-func SetResourceNameKeys(keys string) error {
-	if keys == "" {
-		return errors.New("resoure keys can not be empty")
-	}
-	for _, resourceNameKey := range strings.Split(keys, ",") {
-		resourceNameKey = strings.TrimSpace(resourceNameKey)
-		resourceNameKeys = append(resourceNameKeys, resourceNameKey)
-	}
-	return nil
+// SetNetAttachDefCache sets up the net attach def cache service
+func SetNetAttachDefCache(cache netcache.NetAttachDefCacheService) {
+	nadCache = cache
 }
 
 // SetupInClusterClient setups K8s client to communicate with the API server
@@ -949,17 +970,6 @@ func SetupInClusterClient() kubernetes.Interface {
 	return clientset
 }
 
-// SetInjectHugepageDownApi sets a flag to indicate whether or not to inject the
-// hugepage request and limit for the Downward API.
-func SetInjectHugepageDownApi(hugepageFlag bool) {
-	injectHugepageDownApi = hugepageFlag
-}
-
-// SetHonorExistingResources initialize the honorExistingResources flag
-func SetHonorExistingResources(resourcesHonorFlag bool) {
-	honorExistingResources = resourcesHonorFlag
-}
-
 // SetCustomizedInjections sets additional injections to be applied in Pod spec
 func SetCustomizedInjections(injections *corev1.ConfigMap) {
 	// lock for writing
@@ -971,10 +981,10 @@ func SetCustomizedInjections(injections *corev1.ConfigMap) {
 
 	for k, v := range injections.Data {
 		existValue, exists := userDefinedPatchs[k]
-		// unmarshall userDefined injection to json patch
+		// unmarshal userDefined injection to json patch
 		err := json.Unmarshal([]byte(v), &patch)
 		if err != nil {
-			glog.Errorf("Failed to unmarshall user-defined injection: %v", v)
+			glog.Errorf("Failed to unmarshal user-defined injection: %v", v)
 			continue
 		}
 		// metadata.Annotations is the only supported field for user definition
@@ -989,7 +999,7 @@ func SetCustomizedInjections(injections *corev1.ConfigMap) {
 		}
 	}
 	// remove stale entries from userDefined configMap
-	for k, _ := range userDefinedPatchs {
+	for k := range userDefinedPatchs {
 		if _, ok := injections.Data[k]; ok {
 			continue
 		}
