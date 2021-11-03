@@ -7,6 +7,8 @@ reviewers:
   - s1061123
   - vpickard
   - Billy99
+  - bn222
+  - fabrizio8
 approvers:
   - zshi-redhat
   - dougbtv
@@ -16,5 +18,7 @@ approvers:
   - s1061123
   - vpickard
   - Billy99
+  - bn222
+  - fabrizio8
 component: "Networking"
 subcomponent: "SR-IOV"
