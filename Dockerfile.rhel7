@@ -1,8 +1,8 @@
-FROM registry.ci.openshift.org/ocp/builder:rhel-8-golang-1.15-openshift-4.7 AS builder
+FROM registry.ci.openshift.org/ocp/builder:rhel-8-golang-1.17-openshift-4.10 AS builder
 ADD . /usr/src/network-resources-injector
 RUN cd /usr/src/network-resources-injector && make
 
-FROM registry.ci.openshift.org/ocp/4.7:base
+FROM registry.ci.openshift.org/ocp/4.10:base
 COPY --from=builder /usr/src/network-resources-injector/bin/webhook /usr/bin/
 COPY --from=builder /usr/src/network-resources-injector/bin/installer /usr/bin/
 
