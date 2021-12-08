@@ -21,7 +21,7 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-func TestWebhook(t *testing.T) {
+func TestControlSwitches(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "Controlswitches Suite")
 }

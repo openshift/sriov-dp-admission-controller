@@ -158,6 +158,8 @@ Currently supported arguments are below. If needed, detailed description is avai
 |network-resource-name-keys|k8s.v1.cni.cncf.io/resourceName|comma separated resource name keys|YES|
 |honor-resources|false|Honor the existing requested resources requests & limits|YES|
 
+NOTE: Network Resource Injector would not mutate pods in kube-system namespace.
+
 ### Features control switches
 It is possible to control some features of Network Resource Injector with runtime configuration. NRI is watching for a ConfigMap with name **nri-control-switches** that should be available in the same namespace as NRI (default is kube-system). Below is example with full configuration that sets all features to disable state. Not all values have to be defined. User can toggle only one feature leaving others in default state. By default state, one should understand state set during webhook initialization. Could be a state set by CLI argument, default argument embedded in code or environment variable.
 
@@ -253,7 +255,7 @@ spec:
 
 User Defined injections allows user to define additional injections (besides what's supported in NRI, such as ResourceName, Downward API volumes etc) in Kubernetes ConfigMap and request additional injection for individual pod based on pod label. Currently user defined injection only support injecting pod annotations.
 
-In order to use this feature, user needs to create the user defined injection ConfigMap with name `nri-user-defined-injections` in the namespace where NRI was deployed in (`kube-system` namespace is used when there is no `NAMESPACE` environment variable passed to NRI). The data entry in ConfigMap is in the format of key:value pair. Key is a user defined label that will be used to match with pod labels, Value is the actual injection in the format as defined by [RFC6902](https://tools.ietf.org/html/rfc6902) that will be applied to pod manifest. NRI would listen to the creation/update/deletion of this ConfigMap and update its internal data structure every 30 seconds so that subsquential creation of pods will be evaluated against the latest user defined injections.
+In order to use this feature, user needs to create the user defined injection ConfigMap with name `nri-control-switches` in the namespace where NRI was deployed in (`kube-system` namespace is used when there is no `NAMESPACE` environment variable passed to NRI). The ConfigMap is shared between control switches and user defined injections. The data entry in ConfigMap is in the format of key:value pair. Key is a user defined label that will be used to match with pod labels, Value is the actual injection in the format as defined by [RFC6902](https://tools.ietf.org/html/rfc6902) that will be applied to pod manifest. NRI would listen to the creation/update/deletion of this ConfigMap and update its internal data structure every 30 seconds so that subsequential creation of pods will be evaluated against the latest user defined injections.
 
 Metadata.Annotations in Pod definition is the only supported field for customization, whose `path` should be "/metadata/annotations".
 
@@ -263,10 +265,21 @@ Below is an example of user defined injection ConfigMap:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: nri-user-defined-injections
+  name: nri-control-switches
   namespace: kube-system
 data:
-  feature.pod.kubernetes.io_sriov-network: '{"op": "add", "path": "/metadata/annotations", "value": {"k8s.v1.cni.cncf.io/networks": "sriov-net-attach-def"}}'
+  config.json: |
+    {
+      "user-defined-injections": {
+        "feature.pod.kubernetes.io_sriov-network": {
+          "op": "add",
+          "path": "/metadata/annotations",
+          "value": {
+            "k8s.v1.cni.cncf.io/networks": "sriov-net-attach-def"
+          }
+        }
+      }
+    }
 ```
 
 `feature.pod.kubernetes.io/sriov-network` is a user defined label to request additional networks. Every pod that contains this label with a value set to `"true"` will be applied with the patch that's defined in the following json string.
