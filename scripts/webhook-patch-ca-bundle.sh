@@ -1,8 +1,6 @@
 #!/bin/bash
 # Original script found at: https://github.com/morvencao/kube-mutating-webhook-tutorial/blob/master/deployment/webhook-patch-ca-bundle.sh
 
-ROOT=$(cd $(dirname $0)/../../; pwd)
-
 set -o errexit
 set -o nounset
 set -o pipefail
