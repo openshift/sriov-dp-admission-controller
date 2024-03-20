@@ -12,13 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-FROM golang:1.18.3-alpine as builder
+FROM golang:1.21-alpine as builder
 COPY . /usr/src/network-resources-injector
 WORKDIR /usr/src/network-resources-injector
 RUN apk add --update --virtual build-dependencies build-base bash && \
     make
 
 FROM alpine:3.11
+USER 1001
 COPY --from=builder /usr/src/network-resources-injector/bin/webhook /usr/bin/
 COPY --from=builder /usr/src/network-resources-injector/bin/installer /usr/bin/
 
