@@ -7,5 +7,5 @@ COPY --from=builder /usr/src/network-resources-injector/bin/webhook /usr/bin/
 COPY --from=builder /usr/src/network-resources-injector/bin/installer /usr/bin/
 
 LABEL io.k8s.display-name="SRIOV Admission Controller"
-
+USER 1001
 CMD ["webhook"]
