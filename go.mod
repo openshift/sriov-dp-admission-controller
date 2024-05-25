@@ -1,6 +1,6 @@
 module github.com/k8snetworkplumbingwg/network-resources-injector
 
-go 1.21
+go 1.22
 
 require (
 	github.com/cloudflare/cfssl v1.4.1
