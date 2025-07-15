@@ -5,11 +5,11 @@ package derhelpers
 import (
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/rsa"
 	"crypto/x509"
 
 	cferr "github.com/cloudflare/cfssl/errors"
-	"golang.org/x/crypto/ed25519"
 )
 
 // ParsePrivateKeyDER parses a PKCS #1, PKCS #8, ECDSA, or Ed25519 DER-encoded
@@ -34,13 +34,13 @@ func ParsePrivateKeyDER(keyDER []byte) (key crypto.Signer, err error) {
 		}
 	}
 
-	switch generalKey.(type) {
+	switch generalKey := generalKey.(type) {
 	case *rsa.PrivateKey:
-		return generalKey.(*rsa.PrivateKey), nil
+		return generalKey, nil
 	case *ecdsa.PrivateKey:
-		return generalKey.(*ecdsa.PrivateKey), nil
+		return generalKey, nil
 	case ed25519.PrivateKey:
-		return generalKey.(ed25519.PrivateKey), nil
+		return generalKey, nil
 	}
 
 	// should never reach here

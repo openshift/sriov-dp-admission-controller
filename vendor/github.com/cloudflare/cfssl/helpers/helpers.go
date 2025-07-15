@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rsa"
 	"crypto/tls"
@@ -15,14 +16,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"os"
-
-	"github.com/google/certificate-transparency-go"
-	cttls "github.com/google/certificate-transparency-go/tls"
-	ctx509 "github.com/google/certificate-transparency-go/x509"
-	"golang.org/x/crypto/ocsp"
-
 	"strings"
 	"time"
 
@@ -30,6 +24,11 @@ import (
 	cferr "github.com/cloudflare/cfssl/errors"
 	"github.com/cloudflare/cfssl/helpers/derhelpers"
 	"github.com/cloudflare/cfssl/log"
+
+	ct "github.com/google/certificate-transparency-go"
+	cttls "github.com/google/certificate-transparency-go/tls"
+	ctx509 "github.com/google/certificate-transparency-go/x509"
+	"golang.org/x/crypto/ocsp"
 	"golang.org/x/crypto/pkcs12"
 )
 
@@ -38,6 +37,16 @@ const OneYear = 8760 * time.Hour
 
 // OneDay is a time.Duration representing a day's worth of seconds.
 const OneDay = 24 * time.Hour
+
+// DelegationUsage  is the OID for the DelegationUseage extensions
+var DelegationUsage = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 44363, 44}
+
+// DelegationExtension
+var DelegationExtension = pkix.Extension{
+	Id:       DelegationUsage,
+	Critical: false,
+	Value:    []byte{0x05, 0x00}, // ASN.1 NULL
+}
 
 // InclusiveDate returns the time.Time representation of a date - 1
 // nanosecond. This allows time.After to be used inclusively.
@@ -53,7 +62,7 @@ var Jul2012 = InclusiveDate(2012, time.July, 01)
 // issuing certificates valid for more than 39 months.
 var Apr2015 = InclusiveDate(2015, time.April, 01)
 
-// KeyLength returns the bit size of ECDSA or RSA PublicKey
+// KeyLength returns the bit size of ECDSA, RSA or Ed25519 PublicKey
 func KeyLength(key interface{}) int {
 	if key == nil {
 		return 0
@@ -62,6 +71,8 @@ func KeyLength(key interface{}) int {
 		return ecdsaKey.Curve.Params().BitSize
 	} else if rsaKey, ok := key.(*rsa.PublicKey); ok {
 		return rsaKey.N.BitLen()
+	} else if _, ok := key.(ed25519.PublicKey); ok {
+		return ed25519.PublicKeySize
 	}
 
 	return 0
@@ -112,10 +123,7 @@ func ValidExpiry(c *x509.Certificate) bool {
 		maxMonths = 120
 	}
 
-	if MonthsValid(c) > maxMonths {
-		return false
-	}
-	return true
+	return MonthsValid(c) <= maxMonths
 }
 
 // SignatureString returns the TLS signature string corresponding to
@@ -146,12 +154,14 @@ func SignatureString(alg x509.SignatureAlgorithm) string {
 		return "ECDSAWithSHA384"
 	case x509.ECDSAWithSHA512:
 		return "ECDSAWithSHA512"
+	case x509.PureEd25519:
+		return "Ed25519"
 	default:
 		return "Unknown Signature"
 	}
 }
 
-// HashAlgoString returns the hash algorithm name contains in the signature
+// HashAlgoString returns the hash algorithm name contained in the signature
 // method.
 func HashAlgoString(alg x509.SignatureAlgorithm) string {
 	switch alg {
@@ -179,6 +189,8 @@ func HashAlgoString(alg x509.SignatureAlgorithm) string {
 		return "SHA384"
 	case x509.ECDSAWithSHA512:
 		return "SHA512"
+	case x509.PureEd25519:
+		return "Ed25519"
 	default:
 		return "Unknown Hash Algorithm"
 	}
@@ -335,7 +347,7 @@ func LoadPEMCertPool(certsFile string) (*x509.CertPool, error) {
 	if certsFile == "" {
 		return nil, nil
 	}
-	pemCerts, err := ioutil.ReadFile(certsFile)
+	pemCerts, err := os.ReadFile(certsFile)
 	if err != nil {
 		return nil, err
 	}
@@ -378,7 +390,15 @@ func ParsePrivateKeyPEMWithPassword(keyPEM []byte, password []byte) (key crypto.
 
 // GetKeyDERFromPEM parses a PEM-encoded private key and returns DER-format key bytes.
 func GetKeyDERFromPEM(in []byte, password []byte) ([]byte, error) {
-	keyDER, _ := pem.Decode(in)
+	// Ignore any EC PARAMETERS blocks when looking for a key (openssl includes
+	// them by default).
+	var keyDER *pem.Block
+	for {
+		keyDER, in = pem.Decode(in)
+		if keyDER == nil || keyDER.Type != "EC PARAMETERS" {
+			break
+		}
+	}
 	if keyDER != nil {
 		if procType, ok := keyDER.Headers["Proc-Type"]; ok {
 			if strings.Contains(procType, "ENCRYPTED") {
@@ -437,6 +457,23 @@ func ParseCSRPEM(csrPEM []byte) (*x509.CertificateRequest, error) {
 	return csrObject, nil
 }
 
+// ParseCSRDER parses a PEM-encoded certificate signing request.
+// It does not check the signature. This is useful for dumping data from a CSR
+// locally.
+func ParseCSRDER(csrDER []byte) (*x509.CertificateRequest, error) {
+	csrObject, err := x509.ParseCertificateRequest(csrDER)
+	if err != nil {
+		return nil, err
+	}
+
+	err = csrObject.CheckSignature()
+	if err != nil {
+		return nil, err
+	}
+
+	return csrObject, nil
+}
+
 // SignerAlgo returns an X.509 signature algorithm from a crypto.Signer.
 func SignerAlgo(priv crypto.Signer) x509.SignatureAlgorithm {
 	switch pub := priv.Public().(type) {
@@ -463,6 +500,8 @@ func SignerAlgo(priv crypto.Signer) x509.SignatureAlgorithm {
 		default:
 			return x509.ECDSAWithSHA1
 		}
+	case ed25519.PublicKey:
+		return x509.PureEd25519
 	default:
 		return x509.UnknownSignatureAlgorithm
 	}
@@ -573,13 +612,13 @@ func SCTListFromOCSPResponse(response *ocsp.Response) ([]ct.SignedCertificateTim
 func ReadBytes(valFile string) ([]byte, error) {
 	switch splitVal := strings.SplitN(valFile, ":", 2); len(splitVal) {
 	case 1:
-		return ioutil.ReadFile(valFile)
+		return os.ReadFile(valFile)
 	case 2:
 		switch splitVal[0] {
 		case "env":
 			return []byte(os.Getenv(splitVal[1])), nil
 		case "file":
-			return ioutil.ReadFile(splitVal[1])
+			return os.ReadFile(splitVal[1])
 		default:
 			return nil, fmt.Errorf("unknown prefix: %s", splitVal[0])
 		}
