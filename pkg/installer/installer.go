@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"strings"
 	"time"
@@ -90,10 +89,10 @@ func generateCACertificate() (*local.Signer, []byte, error) {
 }
 
 func writeToFile(certificate, key []byte, certFilename, keyFilename string) error {
-	if err := ioutil.WriteFile("/etc/tls/"+certFilename, certificate, 0400); err != nil {
+	if err := os.WriteFile("/etc/tls/"+certFilename, certificate, 0400); err != nil {
 		return err
 	}
-	if err := ioutil.WriteFile("/etc/tls/"+keyFilename, key, 0400); err != nil {
+	if err := os.WriteFile("/etc/tls/"+keyFilename, key, 0400); err != nil {
 		return err
 	}
 	return nil
@@ -376,4 +375,3 @@ func writeCertDetailsFromSecret() (bool, error) {
 	glog.Info("Certificate details written to file")
 	return true, nil
 }
-
