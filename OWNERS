@@ -1,11 +1,8 @@
 reviewers:
-  - zshi-redhat
   - dougbtv
-  - dcbw
   - squeed
   - fepan
   - s1061123
-  - vpickard
   - Billy99
   - bn222
   - wizhaoredhat
@@ -16,13 +13,10 @@ reviewers:
   - pablmart
   - zhiqiangf
 approvers:
-  - zshi-redhat
   - dougbtv
-  - dcbw
   - squeed
   - fepan
   - s1061123
-  - vpickard
   - Billy99
   - bn222
   - wizhaoredhat
